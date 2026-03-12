@@ -1,0 +1,47 @@
+# Windows CBS Log - DeepLog Configuration
+# Dataset: Windows Component-Based Servicing log
+
+# dataset configuration
+data_dir: ./dataset/Windows
+dataset_name: Windows
+log_file: output.log
+embeddings: embeddings_average.json
+
+# data preprocessing
+grouping: sliding
+session_level: entry
+window_size: 10
+step_size: 5
+sequential: true
+semantic: false
+quantitative: false
+
+# model configuration
+model_name: DeepLog
+embedding_dim: 50
+dropout: 0.1
+hidden_size: 128
+num_layers: 2
+topk: 9
+
+# optimizer configuration
+optimizer: adam
+adam_beta1: 0.9
+adam_beta2: 0.999
+lr: 0.001
+max_epoch: 10
+
+# training configuration
+batch_size: 256
+accumulation_step: 1
+warmup_rate: 0.1
+scheduler: linear
+
+# common configuration
+output_dir: ./output/
+resume: false
+train_size: 0.8
+valid_ratio: 0.1
+train: true
+remove_duplicates: true
+is_chronological: true

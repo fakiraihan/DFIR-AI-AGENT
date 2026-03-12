@@ -1,0 +1,47 @@
+# Windows CBS + EVTX - DeepLog Fine-tuning Configuration
+# Fine-tune from HDFS model
+
+# dataset configuration
+data_dir: ./dataset/Windows_EVTX_Combined
+dataset_name: Windows_EVTX_Combined
+log_file: combined_dataset
+embeddings: embeddings_average.json
+
+# data preprocessing
+grouping: sliding  # Use sliding window, NOT session!
+session_level: entry
+window_size: 10
+step_size: 5
+sequential: true
+semantic: false
+quantitative: false
+
+# model configuration (SAME as HDFS for transfer learning!)
+model_name: DeepLog
+embedding_dim: 300
+dropout: 0.1
+hidden_size: 128
+num_layers: 2
+topk: 9
+
+# optimizer configuration
+optimizer: adam
+adam_beta1: 0.9
+adam_beta2: 0.999
+lr: 0.0001  # Lower LR for fine-tuning!
+max_epoch: 10  # Fewer epochs for fine-tuning
+
+# training configuration
+batch_size: 128
+accumulation_step: 1
+warmup_rate: 0.1
+scheduler: linear
+
+# common configuration
+output_dir: ./output/
+resume: false
+train_size: 0.7
+valid_ratio: 0.15
+train: true
+remove_duplicates: false
+is_chronological: false  # Important: shuffle for better training

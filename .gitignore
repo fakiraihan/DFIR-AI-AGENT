@@ -1,0 +1,90 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.pyc
+
+# Virtual Environments
+.venv/
+venv/
+ENV/
+env/
+
+# Credentials and Keys (SENSITIVE!)
+.env
+*.pem
+*.key
+*.p12
+*.pfx
+keys/
+**/keys/
+FirstPrototype/keys/
+
+# API Keys and Secrets (SENSITIVE!)
+**/backend/.env
+**/.env.local
+**/.env.*.local
+secrets/
+credentials/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+*.log.*
+logs/
+test.log
+training_log.txt
+
+# Model Files (Large Files)
+*.gguf
+*.bin
+*.pt
+*.pth
+*.pkl
+*.h5
+*.safetensors
+Sec-Foundation/*.gguf
+
+# Dataset Files (Large or Generated)
+dataset/*/
+**/dataset/*/
+output/*/
+**/output/*/
+data/raw_logs/
+*.csv
+*.zip
+wdswdatasetlabeled.zip
+eventlog.csv
+
+# Node modules
+node_modules/
+**/node_modules/
+package-lock.json
+
+# Build outputs
+dist/
+build/
+*.egg-info/
+
+# Jupyter
+*.ipynb_checkpoints/
+.ipynb_checkpoints
+
+# OS
+Thumbs.db
+*.DS_Store
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
