@@ -52,6 +52,7 @@ training_log.txt
 *.pkl
 *.h5
 *.safetensors
+Sec-Foundation/
 Sec-Foundation/*.gguf
 
 # Dataset Files (Large or Generated)
@@ -64,6 +65,9 @@ data/raw_logs/
 *.zip
 wdswdatasetlabeled.zip
 eventlog.csv
+
+# Embedded repository and large sample corpus
+LogADEmpirical-dev/EVTX-ATTACK-SAMPLES/
 
 # Node modules
 node_modules/
