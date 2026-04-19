@@ -1,15 +1,100 @@
-import React, { useState } from 'react'
-import './App.css'
+import React, { useEffect, useState, Suspense, lazy } from 'react'
+import { Box, Toolbar, useMediaQuery, useTheme, CircularProgress, Typography } from '@mui/material'
 import Header from './components/Header'
 import Sidebar from './components/Sidebar'
 import UploadPage from './components/UploadPage'
-import InvestigationPage from './components/InvestigationPage'
-import ChatbotPage from './components/ChatbotPage'
+
+const InvestigationPage = lazy(() => import('./components/InvestigationPage'))
+const SettingsPage = lazy(() => import('./components/SettingsPage'))
+
+const STORAGE_KEYS = {
+  currentView: 'dfir.currentView',
+  sessionId: 'dfir.sessionId',
+}
+
+const VALID_VIEWS = new Set(['upload', 'investigation', 'settings'])
+
+const getStoredWorkspaceState = () => {
+  if (typeof window === 'undefined') {
+    return {
+      currentView: 'upload',
+      sessionId: null,
+    }
+  }
+
+  try {
+    const storedSessionId = window.sessionStorage.getItem(STORAGE_KEYS.sessionId)
+    const storedView = window.sessionStorage.getItem(STORAGE_KEYS.currentView)
+    const sessionId = storedSessionId && storedSessionId.trim() ? storedSessionId : null
+    const currentView = VALID_VIEWS.has(storedView) ? storedView : 'upload'
+
+    return {
+      sessionId,
+      currentView: currentView === 'investigation' && !sessionId ? 'upload' : currentView,
+    }
+  } catch (error) {
+    console.error('Failed to restore workspace state:', error)
+
+    return {
+      currentView: 'upload',
+      sessionId: null,
+    }
+  }
+}
+
+const drawerWidth = 260;
 
 function App() {
-  const [currentView, setCurrentView] = useState('upload') // upload, investigation, chatbot
-  const [sessionId, setSessionId] = useState(null)
-  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const storedWorkspaceState = getStoredWorkspaceState()
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('md'));
+  const [currentView, setCurrentView] = useState(storedWorkspaceState.currentView) // upload, investigation, settings
+  const [sessionId, setSessionId] = useState(storedWorkspaceState.sessionId)
+  const [sidebarOpen, setSidebarOpen] = useState(!isMobile)
+
+  // Sync sidebar open state when mobile state changes
+  React.useEffect(() => {
+    setSidebarOpen(!isMobile)
+  }, [isMobile])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    try {
+      if (sessionId) {
+        window.sessionStorage.setItem(STORAGE_KEYS.sessionId, sessionId)
+      } else {
+        window.sessionStorage.removeItem(STORAGE_KEYS.sessionId)
+      }
+    } catch (error) {
+      console.error('Failed to persist session id:', error)
+    }
+  }, [sessionId])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    const persistedView = currentView === 'investigation' && !sessionId ? 'upload' : currentView
+
+    try {
+      window.sessionStorage.setItem(STORAGE_KEYS.currentView, persistedView)
+    } catch (error) {
+      console.error('Failed to persist current view:', error)
+    }
+  }, [currentView, sessionId])
+
+  const handleSetCurrentView = (view) => {
+    const nextView = view === 'investigation' && !sessionId ? 'upload' : view
+
+    setCurrentView(nextView)
+    if (isMobile) {
+      setSidebarOpen(false)
+    }
+  }
 
   const handleUploadSuccess = (newSessionId) => {
     setSessionId(newSessionId)
@@ -21,47 +106,78 @@ function App() {
     setSessionId(null)
   }
 
-  const handleOpenChatbot = () => {
-    setCurrentView('chatbot')
-  }
-
   return (
-    <div className="app">
+    <Box sx={{ display: 'flex', minHeight: '100vh', width: '100%', bgcolor: 'background.default' }}>
       <Header 
         sidebarOpen={sidebarOpen}
         setSidebarOpen={setSidebarOpen}
+        drawerWidth={drawerWidth}
       />
       
-      <div className="app-container">
-        <Sidebar 
-          isOpen={sidebarOpen}
-          currentView={currentView}
-          setCurrentView={setCurrentView}
-          sessionId={sessionId}
-        />
+      <Sidebar 
+        isOpen={sidebarOpen}
+        setIsOpen={setSidebarOpen}
+        currentView={currentView}
+        setCurrentView={handleSetCurrentView}
+        sessionId={sessionId}
+        drawerWidth={drawerWidth}
+        isMobile={isMobile}
+      />
+
+      <Box
+        component="main"
+        sx={{
+          flexGrow: 1,
+          p: 3,
+          width: { md: `calc(100% - ${drawerWidth}px)` },
+          minHeight: '100vh',
+          display: 'flex',
+          flexDirection: 'column',
+          transition: theme.transitions.create('margin', {
+            easing: theme.transitions.easing.sharp,
+            duration: theme.transitions.duration.leavingScreen,
+          }),
+          ...(sidebarOpen && !isMobile && {
+            transition: theme.transitions.create('margin', {
+              easing: theme.transitions.easing.easeOut,
+              duration: theme.transitions.duration.enteringScreen,
+            }),
+            marginLeft: 0,
+          }),
+        }}
+      >
+        <Toolbar /> {/* Spacer for AppBar */}
         
-        <main className={`main-content ${sidebarOpen ? '' : 'full-width'}`}>
-          {currentView === 'upload' && (
-            <UploadPage onUploadSuccess={handleUploadSuccess} />
-          )}
-          
-          {currentView === 'investigation' && sessionId && (
+        {currentView === 'upload' && (
+          <UploadPage onUploadSuccess={handleUploadSuccess} />
+        )}
+        
+        {currentView === 'investigation' && sessionId && (
+          <Suspense fallback={
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flexGrow: 1 }}>
+              <CircularProgress size={60} thickness={4} sx={{ mb: 3 }} />
+              <Typography variant="h6" color="text.secondary">Loading investigation module...</Typography>
+            </Box>
+          }>
             <InvestigationPage 
               sessionId={sessionId}
               onBackToUpload={handleBackToUpload}
-              onOpenChatbot={handleOpenChatbot}
             />
-          )}
-          
-          {currentView === 'chatbot' && sessionId && (
-            <ChatbotPage 
-              sessionId={sessionId}
-              onBack={() => setCurrentView('investigation')}
-            />
-          )}
-        </main>
-      </div>
-    </div>
+          </Suspense>
+        )}
+
+        {currentView === 'settings' && (
+          <Suspense fallback={
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flexGrow: 1 }}>
+              <CircularProgress size={60} thickness={4} sx={{ mb: 3 }} />
+              <Typography variant="h6" color="text.secondary">Loading settings module...</Typography>
+            </Box>
+          }>
+            <SettingsPage />
+          </Suspense>
+        )}
+      </Box>
+    </Box>
   )
 }
 

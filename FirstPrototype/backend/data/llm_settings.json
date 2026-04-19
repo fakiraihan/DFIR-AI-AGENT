@@ -1,0 +1,21 @@
+{
+  "selected_provider": "ollama",
+  "providers": {
+    "ollama": {
+      "enabled": true,
+      "base_url": "http://localhost:11434",
+      "model": "sec-foundation:8b-gpu"
+    },
+    "gemini": {
+      "enabled": false,
+      "model": "gemini-2.5-flash",
+      "api_key": ""
+    },
+    "openrouter": {
+      "enabled": false,
+      "base_url": "https://openrouter.ai/api/v1",
+      "model": "google/gemini-2.5-flash",
+      "api_key": ""
+    }
+  }
+}

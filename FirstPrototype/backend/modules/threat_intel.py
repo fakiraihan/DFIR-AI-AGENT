@@ -81,26 +81,36 @@ class ThreatIntelToolkit:
             print(f"    Response: HTTP {response.status_code}")
             
             response.raise_for_status()
-            data = response.json()
-            
-            print(f"    Query status: {data.get('query_status')}")
-            print(f"    Results: {len(data.get('data', []))} items")
+            raw_data = response.json()
+            data = raw_data if isinstance(raw_data, dict) else {}
+            query_status = data.get("query_status") if isinstance(data.get("query_status"), str) else "unknown"
+
+            response_items = data.get("data", [])
+            if isinstance(response_items, dict):
+                response_items = [response_items]
+            elif not isinstance(response_items, list):
+                response_items = []
+
+            response_items = [item for item in response_items if isinstance(item, dict)]
+
+            print(f"    Query status: {query_status}")
+            print(f"    Results: {len(response_items)} items")
             
             result = {
                 "tool": "threatfox",
                 "ioc": ioc,
                 "ioc_type": ioc_type,
                 "timestamp": datetime.now().isoformat(),
-                "status": data.get("query_status"),
-                "data": data.get("data", []),
+                "status": query_status,
+                "data": response_items,
                 "malware_family": None,
                 "confidence_level": None,
                 "threat_type": None
             }
             
             # Extract key info
-            if data.get("data"):
-                first_entry = data["data"][0]
+            if response_items:
+                first_entry = response_items[0]
                 result["malware_family"] = first_entry.get("malware")
                 result["confidence_level"] = first_entry.get("confidence_level")
                 result["threat_type"] = first_entry.get("threat_type")

@@ -29,12 +29,6 @@ ollama>=0.1.6
 requests>=2.31.0
 aiohttp>=3.9.1
 
-# Cryptography
-cryptography>=41.0.7
-
-# PDF Generation
-reportlab>=4.0.0
-
 # Utilities
 python-dotenv>=1.0.0
 tqdm>=4.66.0

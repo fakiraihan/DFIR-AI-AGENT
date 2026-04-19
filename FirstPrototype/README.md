@@ -8,7 +8,6 @@ Sistem otomatisasi investigasi insiden siber menggunakan AI Agent berbasis LangG
 - ✅ **Anomaly Detection**: DeepLog (LSTM) terlatih pada 996k normal Windows logs
 - ✅ **AI Agent**: LangGraph orchestration dengan Foundation-Sec-8B (local inference)
 - ✅ **Threat Intelligence**: 6 API integrations (ThreatFox, MalwareBazaar, URLHaus, OTX, GreyNoise, VirusTotal)
-- ✅ **Digital Signature**: RSA-2048 + SHA-256 untuk integritas laporan
 - ⏳ **RAG Chatbot**: Query laporan investigasi (coming soon)
 - ⏳ **React Frontend**: Web UI untuk upload dan visualisasi (coming soon)
 
@@ -26,10 +25,9 @@ FirstPrototype/
 │       ├── anomaly.py             # DeepLog anomaly detection
 │       ├── agent.py               # LangGraph AI agent
 │       ├── threat_intel.py        # Threat intel tool wrappers
-│       └── report.py              # Report generation & signing
+│       └── report.py              # Report generation
 ├── data/                          # Uploaded logs (temporary)
 ├── output/                        # Investigation reports
-├── keys/                          # RSA keypair
 └── models/                        # Model references
 ```
 
@@ -92,7 +90,7 @@ Expected output:
 - ✅ Parsing logs dengan Drain
 - ✅ Deteksi anomali dengan DeepLog
 - ✅ AI Agent investigation (jika Ollama running)
-- ✅ Generate report with digital signature
+- ✅ Generate structured investigation report
 
 ### 6. Start API Server
 
@@ -199,36 +197,6 @@ DEEPLOG_TOPK=9
 Setelah server running, buka:
 - **Swagger UI**: http://localhost:8000/docs
 - **ReDoc**: http://localhost:8000/redoc
-
-## 🔐 Digital Signature
-
-Report generation automatically:
-1. Generates RSA-2048 keypair (first run)
-2. Calculates SHA-256 hash of report
-3. Signs hash dengan RSA private key
-4. Embeds signature metadata dalam report
-
-Verifikasi signature:
-```python
-from modules.report import ReportGenerator
-import json
-
-generator = ReportGenerator(
-    private_key_path="../keys/private.pem",
-    public_key_path="../keys/public.pem"
-)
-
-# Load signed report
-with open("output/test/DFIR-20260228-103145.json") as f:
-    signed_report = json.load(f)
-
-report = signed_report["report"]
-signature = signed_report["signature"]
-
-# Verify
-is_valid = generator.verify_signature(report, signature)
-print(f"Signature valid: {is_valid}")
-```
 
 ## 🐛 Troubleshooting
 
