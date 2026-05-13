@@ -23,8 +23,8 @@ const getStoredWorkspaceState = () => {
   }
 
   try {
-    const storedSessionId = window.sessionStorage.getItem(STORAGE_KEYS.sessionId)
-    const storedView = window.sessionStorage.getItem(STORAGE_KEYS.currentView)
+    const storedSessionId = window.localStorage.getItem(STORAGE_KEYS.sessionId)
+    const storedView = window.localStorage.getItem(STORAGE_KEYS.currentView)
     const sessionId = storedSessionId && storedSessionId.trim() ? storedSessionId : null
     const currentView = VALID_VIEWS.has(storedView) ? storedView : 'upload'
 
@@ -64,9 +64,9 @@ function App() {
 
     try {
       if (sessionId) {
-        window.sessionStorage.setItem(STORAGE_KEYS.sessionId, sessionId)
+        window.localStorage.setItem(STORAGE_KEYS.sessionId, sessionId)
       } else {
-        window.sessionStorage.removeItem(STORAGE_KEYS.sessionId)
+        window.localStorage.removeItem(STORAGE_KEYS.sessionId)
       }
     } catch (error) {
       console.error('Failed to persist session id:', error)
@@ -81,7 +81,7 @@ function App() {
     const persistedView = currentView === 'investigation' && !sessionId ? 'upload' : currentView
 
     try {
-      window.sessionStorage.setItem(STORAGE_KEYS.currentView, persistedView)
+      window.localStorage.setItem(STORAGE_KEYS.currentView, persistedView)
     } catch (error) {
       console.error('Failed to persist current view:', error)
     }
@@ -101,9 +101,23 @@ function App() {
     setCurrentView('investigation')
   }
 
+  const handleSelectSession = (selectedSessionId) => {
+    setSessionId(selectedSessionId)
+    setCurrentView('investigation')
+    if (isMobile) {
+      setSidebarOpen(false)
+    }
+  }
+
   const handleBackToUpload = () => {
     setCurrentView('upload')
     setSessionId(null)
+  }
+
+  const handleSessionDeleted = (deletedSessionId) => {
+    if (deletedSessionId === sessionId) {
+      handleBackToUpload()
+    }
   }
 
   return (
@@ -120,6 +134,8 @@ function App() {
         currentView={currentView}
         setCurrentView={handleSetCurrentView}
         sessionId={sessionId}
+        onSelectSession={handleSelectSession}
+        onSessionDeleted={handleSessionDeleted}
         drawerWidth={drawerWidth}
         isMobile={isMobile}
       />
@@ -162,6 +178,7 @@ function App() {
             <InvestigationPage 
               sessionId={sessionId}
               onBackToUpload={handleBackToUpload}
+              onSessionMissing={handleBackToUpload}
             />
           </Suspense>
         )}

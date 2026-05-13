@@ -12,3 +12,10 @@ dist/
 build/
 output/
 data/raw_logs/
+data/session_store/
+data/test_session_store_cache/
+backend/data/gate_observations.jsonl
+backend/data/llm_settings.json
+backend/data/session_store/
+backend/data/raw_logs/
+keys/

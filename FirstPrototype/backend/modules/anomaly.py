@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import re
-import sys
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -16,27 +15,8 @@ import pandas as pd
 import torch
 from tqdm import tqdm
 
-
-def _resolve_training_workspace() -> Path:
-    current = Path(__file__).resolve()
-    repo_root = current.parents[3]  # D:\FAKI
-    candidates = [
-        repo_root / "NEWMLMODL",
-        repo_root / "LogADEmpirical-dev",
-    ]
-    for candidate in candidates:
-        if (candidate / "logadempirical").exists():
-            return candidate
-    raise FileNotFoundError(
-        "Unable to find training workspace with 'logadempirical' package."
-    )
-
-
-TRAINING_WORKSPACE = _resolve_training_workspace()
-sys.path.insert(0, str(TRAINING_WORKSPACE))
-
-from logadempirical.data.vocab import Vocab  # type: ignore  # noqa: E402
-from logadempirical.models.lstm import DeepLog as DeepLogModel  # type: ignore  # noqa: E402
+from logadempirical.data.vocab import Vocab
+from logadempirical.models.lstm import DeepLog as DeepLogModel
 
 
 class DeepLogDetector:

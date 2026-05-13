@@ -77,6 +77,14 @@ let theme = createTheme({
         '::selection': {
           backgroundColor: 'rgba(0, 184, 217, 0.25)',
         },
+        '@keyframes progressGlowSweep': {
+          '0%': {
+            transform: 'translateX(-120%)',
+          },
+          '100%': {
+            transform: 'translateX(120%)',
+          },
+        },
         '*::-webkit-scrollbar': {
           width: 10,
           height: 10,
@@ -187,9 +195,28 @@ let theme = createTheme({
       styleOverrides: {
         root: {
           backgroundColor: 'rgba(152, 162, 179, 0.10)',
+          overflow: 'hidden',
         },
         bar: {
           borderRadius: 999,
+          position: 'relative',
+          overflow: 'hidden',
+          backgroundImage: 'linear-gradient(90deg, #0891b2 0%, #00b8d9 45%, #7dd3fc 100%)',
+          boxShadow: '0 0 16px rgba(0, 184, 217, 0.32)',
+          transition: 'transform 900ms cubic-bezier(0.22, 1, 0.36, 1)',
+          '&::after': {
+            content: '""',
+            position: 'absolute',
+            inset: 0,
+            background: 'linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.34) 48%, transparent 100%)',
+            animation: 'progressGlowSweep 1.8s ease-in-out infinite',
+          },
+          '@media (prefers-reduced-motion: reduce)': {
+            transition: 'none',
+            '&::after': {
+              animation: 'none',
+            },
+          },
         },
       },
     },

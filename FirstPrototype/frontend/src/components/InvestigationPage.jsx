@@ -93,11 +93,22 @@ const getStatusChipColor = (statusValue) => {
   return 'warning'
 }
 
-const InvestigationPage = ({ sessionId, onBackToUpload }) => {
+const getProgressValue = (value) => {
+  const numericValue = Number(value)
+
+  if (!Number.isFinite(numericValue)) {
+    return 0
+  }
+
+  return Math.min(100, Math.max(0, numericValue))
+}
+
+const InvestigationPage = ({ sessionId, onBackToUpload, onSessionMissing }) => {
   const [status, setStatus] = useState(null)
   const [report, setReport] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [displayProgress, setDisplayProgress] = useState(0)
   const [exportAnchorEl, setExportAnchorEl] = useState(null)
   const [isExporting, setIsExporting] = useState(false)
   const pdfExportRef = useRef(null)
@@ -115,6 +126,7 @@ const InvestigationPage = ({ sessionId, onBackToUpload }) => {
   const currentStage = stages.find(stage => stage.id === status?.stage)
   const stageLabel = currentStage?.name || 'Investigation'
   const stageDescription = status?.current_message || currentStage?.description || 'Processing investigation results.'
+  const targetProgress = getProgressValue(status?.progress)
 
   const severity = report?.metadata?.severity || (status?.status === 'error' || status?.status === 'failed' ? 'HIGH' : status?.status === 'completed' ? 'MEDIUM' : 'LOW')
   const statusLabel = status?.status ? status.status.charAt(0).toUpperCase() + status.status.slice(1) : 'Pending'
@@ -126,7 +138,7 @@ const InvestigationPage = ({ sessionId, onBackToUpload }) => {
   const summaryCards = [
     {
       label: 'Progress',
-      value: `${Math.round(status?.progress || 0)}%`,
+      value: `${Math.round(displayProgress)}%`,
       tone: 'primary.main',
       helper: stageLabel,
       icon: <AnalyticsIcon fontSize="small" />,
@@ -189,6 +201,11 @@ const InvestigationPage = ({ sessionId, onBackToUpload }) => {
         }
       } catch (err) {
         if (isActive) {
+          if (err.response?.status === 404 && onSessionMissing) {
+            onSessionMissing()
+            return
+          }
+
           setError(err.response?.data?.detail || 'Failed to fetch status')
         }
       } finally {
@@ -211,7 +228,35 @@ const InvestigationPage = ({ sessionId, onBackToUpload }) => {
         clearTimeout(timeoutId)
       }
     }
+  }, [sessionId, onSessionMissing])
+
+  useEffect(() => {
+    setDisplayProgress(0)
   }, [sessionId])
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setDisplayProgress((previousProgress) => {
+        const currentProgress = getProgressValue(previousProgress)
+        const distance = targetProgress - currentProgress
+
+        if (Math.abs(distance) < 0.2) {
+          window.clearInterval(intervalId)
+          return targetProgress
+        }
+
+        const direction = Math.sign(distance)
+        const easingStep = Math.max(0.18, Math.abs(distance) * 0.055)
+        const nextProgress = currentProgress + direction * easingStep
+
+        return direction > 0
+          ? Math.min(targetProgress, nextProgress)
+          : Math.max(targetProgress, nextProgress)
+      })
+    }, 16)
+
+    return () => window.clearInterval(intervalId)
+  }, [targetProgress])
 
   const handleExportMenuClick = (event) => {
     setExportAnchorEl(event.currentTarget)
@@ -382,13 +427,17 @@ const InvestigationPage = ({ sessionId, onBackToUpload }) => {
             <Box sx={{ width: '100%', mr: 2 }}>
               <LinearProgress 
                 variant="determinate" 
-                value={status.progress || 0} 
+                value={displayProgress} 
                 color={status.status === 'completed' ? 'success' : 'primary'}
-                sx={{ height: 8, borderRadius: 4 }}
+                sx={{
+                  height: 8,
+                  borderRadius: 4,
+                  overflow: 'hidden',
+                }}
               />
             </Box>
             <Box sx={{ minWidth: 35 }}>
-              <Typography variant="body2" color="text.secondary">{`${Math.round(status.progress || 0)}%`}</Typography>
+              <Typography variant="body2" color="text.secondary">{`${Math.round(displayProgress)}%`}</Typography>
             </Box>
           </Box>
 
@@ -400,7 +449,34 @@ const InvestigationPage = ({ sessionId, onBackToUpload }) => {
             </Typography>
           </Box>
 
-          {(status.status === 'processing' || status.current_message) && (
+          {status.status === 'completed' && (
+            <Box
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 1.5,
+                px: 2,
+                py: 1.5,
+                borderRadius: 2,
+                bgcolor: 'rgba(16, 185, 129, 0.08)',
+                border: '1px solid',
+                borderColor: 'success.dark',
+                color: 'success.light',
+              }}
+            >
+              <CheckCircleIcon fontSize="small" />
+              <Box>
+                <Typography variant="caption" sx={{ display: 'block', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                  Completed
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  {stageDescription}
+                </Typography>
+              </Box>
+            </Box>
+          )}
+
+          {status.status === 'processing' && (
             <ThinkingIndicator stageLabel={stageLabel} message={stageDescription} />
           )}
 

@@ -7,6 +7,7 @@ Outputs per-line records that can be consumed by DeepLog and downstream DFIR ste
 from __future__ import annotations
 
 import json
+import logging
 import re
 import tempfile
 import importlib.util
@@ -20,18 +21,14 @@ from drain3 import TemplateMiner
 from drain3.template_miner_config import TemplateMinerConfig
 from tqdm import tqdm
 
+from modules.workspace import resolve_training_workspace
+
+
+logger = logging.getLogger(__name__)
+
 
 def _resolve_training_workspace() -> Path:
-    current = Path(__file__).resolve()
-    repo_root = current.parents[3]  # D:\FAKI
-    candidates = [
-        repo_root / "NEWMLMODL",
-        repo_root / "LogADEmpirical-dev",
-    ]
-    for candidate in candidates:
-        if (candidate / "dataset" / "Drain.py").exists():
-            return candidate
-    raise FileNotFoundError("Unable to find training workspace with dataset/Drain.py")
+    return resolve_training_workspace(__file__, "dataset/Drain.py")
 
 
 class DrainParser:
@@ -57,7 +54,15 @@ class DrainParser:
 
         self.template_miner = TemplateMiner(config=config)
         self.latest_templates: List[Dict[str, Any]] = []
-        self.training_workspace = _resolve_training_workspace()
+        self.last_parse_stats: Dict[str, int] = {"skipped_malformed_records": 0}
+        self.training_workspace: Optional[Path] = None
+        try:
+            self.training_workspace = _resolve_training_workspace()
+        except FileNotFoundError as exc:
+            logger.warning(
+                "Training Drain workspace unavailable; falling back to local drain3 parser: %s",
+                exc,
+            )
 
     def preprocess_log_line(self, log_line: str) -> str:
         """Mask high-variance tokens before Drain parsing."""
@@ -78,6 +83,7 @@ class DrainParser:
     ) -> pd.DataFrame:
         """Parse Windows EVTX file and return per-line structured rows."""
         parsed_events: List[Dict] = []
+        skipped_malformed_records = 0
 
         with evtx.Evtx(file_path) as log:
             for idx, record in enumerate(
@@ -135,10 +141,27 @@ class DrainParser:
                             "cluster_id": cluster_id,
                         }
                     )
-                except Exception:
+                except Exception as exc:
+                    skipped_malformed_records += 1
+                    logger.warning(
+                        "Skipping malformed EVTX record %s from %s: %s",
+                        idx,
+                        file_path,
+                        exc,
+                    )
                     continue
 
         dataframe = self._as_dataframe(parsed_events)
+        dataframe.attrs["skipped_malformed_records"] = skipped_malformed_records
+        self.last_parse_stats = {
+            "skipped_malformed_records": skipped_malformed_records,
+        }
+        if skipped_malformed_records:
+            logger.warning(
+                "Skipped %s malformed EVTX records while parsing %s",
+                skipped_malformed_records,
+                file_path,
+            )
         self.latest_templates = self._derive_templates(dataframe)
         return dataframe
 
@@ -284,6 +307,9 @@ class DrainParser:
         return templates
 
     def _load_training_drain_module(self):
+        if self.training_workspace is None:
+            raise ImportError("Training Drain workspace not available")
+
         drain_py = self.training_workspace / "dataset" / "Drain.py"
         module_name = "training_drain_module"
         spec = importlib.util.spec_from_file_location(module_name, str(drain_py))

@@ -26,7 +26,7 @@ Kondisi ini mengakibatkan tingginya beban kognitif analis, waktu investigasi yan
 
 ## **1.2 Tujuan Produk**
 
-* Merancang dan membangun prototipe AI Agent berbasis Tool-Augmented LLM (TaLLM) yang mengotomasi investigasi DFIR dari parsing log hingga laporan bertanda tangan digital.
+* Merancang dan membangun prototipe AI Agent berbasis Tool-Augmented LLM (TaLLM) yang mengotomasi investigasi DFIR dari parsing log hingga laporan investigasi terstruktur.
 * Mengevaluasi performa teknis AI Agent: ketepatan penggunaan tool analitik (Tool Correctness) dan kualitas laporan (G-Eval).
 * Mengukur efisiensi waktu investigasi dibandingkan metode manual (Time Reduction Rate).
 * Mengukur tingkat usability sistem menggunakan System Usability Scale (SUS).
@@ -39,8 +39,7 @@ Sistem mencakup:
 * Deteksi anomali berbasis deep learning menggunakan DeepLog (LSTM-based sequence model with top-k prediction).
 * Orkestrasi investigasi oleh AI Agent berbasis LangGraph dengan model Foundation-Sec-8B (local inference).
 * Enrichment IOC via threat intelligence API: ThreatFox, MalwareBazaar, URLHaus, AlienVault OTX, GreyNoise, VirusTotal.
-* Generasi laporan investigasi terstruktur dengan digital signature (RSA-2048 + SHA-256).
-* Mode interaksi chatbot berbasis RAG read-only terhadap laporan final.
+* Generasi laporan investigasi terstruktur.
 * Antarmuka pengguna berbasis React (web).
 
 Di luar ruang lingkup:
@@ -70,19 +69,19 @@ Sistem dibangun dengan arsitektur client-server. Frontend (React) mengirimkan fi
 | Log Parsing | Drain (Python) | Raw log files | Event templates + parameter arrays |
 | Anomaly Detection | DeepLog (LSTM) | Event template sequences | Anomaly predictions per window |
 | AI Agent Orchestration | LangGraph + Foundation-Sec-8B | Anomaly candidates | Tool calls + investigation context |
-| Report Generation | LLM + RSA-2048/SHA-256 | Investigation context | Signed investigation report |
+| Report Generation | LLM | Investigation context | Investigation report |
 
 ## **2.2 Stack Teknologi**
 
 | **Layer** | **Komponen** | **Keterangan** |
 | --- | --- | --- |
-| Frontend | React.js | UI upload log, visualisasi hasil, chatbot |
+| Frontend | React.js | UI upload log, visualisasi hasil |
 | Backend API | FastAPI (Python) | REST API, orchestration controller |
 | Log Parsing | Drain3 (drain3 library) | depth=4, sim\_threshold=0.5 |
 | Anomaly Detection | DeepLog / PyTorch | LSTM embedding=128, hidden=128, layers=2 |
 | AI Agent Framework | LangGraph | Stateful graph, conditional edges |
 | LLM Inference | Foundation-Sec-8B (local) | Llama-3.1 based, cybersecurity domain |
-| Cryptography | cryptography (Python lib) | RSA-2048 + SHA-256, PKCS#1 v2.2 |
+| Cryptography | cryptography (Python lib) | (optional — used for non-signature cryptographic utilities if needed) |
 | Evaluation | DeepEval framework | Tool Correctness + G-Eval metrics |
 | Dataset | Loghub (Windows Event Log) | Disediakan di folder lokal |
 
@@ -94,8 +93,7 @@ Sistem dibangun dengan arsitektur client-server. Frontend (React) mengirimkan fi
 * Window dengan anomaly (actual event not in top-k predictions) dieskalasikan sebagai kandidat anomali ke modul AI Agent.
 * AI Agent (LangGraph stateful graph) menjalankan: ekstraksi IOC dari parameter\_array → pemilihan API threat intelligence → pemanggilan tool wrapper (Python) → penerimaan respons JSON → korelasi konteks → update episodic memory.
 * Setelah siklus reasoning selesai, LLM menghasilkan narasi laporan investigasi terstruktur.
-* Laporan di-hash dengan SHA-256 → ditandatangani dengan RSA-2048 private key → metadata tanda tangan dilekatkan pada laporan.
-* Laporan final tersedia untuk: (a) unduh oleh user, dan (b) basis chatbot RAG read-only.
+* Laporan final tersedia untuk unduh oleh user.
 
 # **3. Spesifikasi Modul**
 
@@ -169,7 +167,6 @@ Catatan implementasi: Model DeepLog dan dataset pelatihan (Wintrim) sudah dilati
   + tool\_executor: Memanggil wrapper Python untuk API yang dipilih, menyimpan respons ke episodic memory.
   + correlator: Mengkorelasikan temuan tool calls dengan konteks anomali, memperbarui reasoning state.
   + report\_generator: LLM menghasilkan narasi laporan investigasi terstruktur.
-  + chatbot\_interface: Mode read-only RAG menggunakan laporan final sebagai context window.
 * Edge kondisional: transisi antar node bergantung pada hasil eksekusi node sebelumnya (adaptive reasoning).
 * Memori episodik: basis data terstruktur yang menyimpan anomali ringkasan, hasil tool calls, korelasi, dan laporan akhir per sesi investigasi.
 
@@ -200,9 +197,8 @@ Catatan implementasi: Model DeepLog dan dataset pelatihan (Wintrim) sudah dilati
 * Tool call JSON valid sebelum eksekusi (divalidasi oleh lapisan kontrol — tidak langsung di-execute).
 * Respons API ter-simpan di episodic memory dan dimasukkan kembali ke reasoning context.
 * Agent tidak memanggil tool yang tidak relevan (hallucination tool call) — diukur melalui Tool Correctness metric.
-* Chatbot mode tidak mengeksekusi tool calls dan tidak mengakses data di luar laporan final.
 
-## **3.4 Modul Laporan & Digital Signature**
+## **3.4 Modul Laporan**
 
 ### **3.4.1 Struktur Laporan Investigasi**
 
@@ -211,24 +207,12 @@ Catatan implementasi: Model DeepLog dan dataset pelatihan (Wintrim) sudah dilati
 * Attack Timeline: rekonstruksi urutan event anomali secara kronologis.
 * Tool Intelligence Summary: narasi korelasi dari seluruh respons threat intelligence API.
 * Recommendations: rekomendasi tindak lanjut berdasarkan temuan.
-* Metadata: timestamp analisis, model yang digunakan, hash dokumen, tanda tangan digital.
+* Metadata: timestamp analisis, model yang digunakan, versi model yang dipakai.
 
-### **3.4.2 Skema Digital Signature**
+### **3.4.2 Acceptance Criteria**
 
-| **Komponen** | **Spesifikasi** |
-| --- | --- |
-| Hash function | SHA-256 (SHA-2 family) — FIPS 180-4 |
-| Signature algorithm | RSA — PKCS#1 v2.2 (RFC 8017) |
-| Key length | Minimum 2048-bit RSA |
-| Standard | Digital Signature Standard (DSS) FIPS 186-4/186-5 |
-| Storage | Metadata tanda tangan dilekatkan pada laporan (format terstruktur JSON) |
-| Verification | Hitung ulang SHA-256 laporan → validasi dengan RSA public key |
-
-### **3.4.3 Acceptance Criteria**
-
-* Laporan yang tidak dimodifikasi berhasil diverifikasi (signature valid).
-* Laporan yang dimodifikasi satu karakter gagal verifikasi (tamper detection).
-* Private key tidak pernah dikirim ke frontend atau disimpan dalam payload API.
+* Laporan terstruktur yang lengkap dengan section yang ditentukan.
+* Laporan dapat diekspor ke format PDF/JSON untuk dokumentasi dan distribusi.
 
 # **4. Functional Requirements**
 
@@ -246,10 +230,7 @@ Catatan implementasi: Model DeepLog dan dataset pelatihan (Wintrim) sudah dilati
 | FR-08 | Agent | Sistem memvalidasi format JSON tool call sebelum eksekusi (schema validation). | Must Have |
 | FR-09 | Agent | Respons API tersimpan di episodic memory dan dimasukkan kembali ke reasoning context agen. | Must Have |
 | FR-10 | Report | Sistem menghasilkan laporan investigasi terstruktur berdasarkan konteks agen. | Must Have |
-| FR-11 | Report | Sistem menghitung SHA-256 laporan dan menandatanganinya dengan RSA-2048. | Must Have |
-| FR-12 | Report | Sistem dapat memverifikasi tanda tangan laporan menggunakan RSA public key. | Must Have |
-| FR-13 | Chatbot | Setelah laporan dihasilkan, user dapat berinteraksi via chatbot berbasis RAG. | Should Have |
-| FR-14 | Chatbot | Mode chatbot bersifat read-only — tool calling dinonaktifkan sepenuhnya. | Must Have |
+
 | FR-15 | UI | Antarmuka menampilkan visualisasi hasil anomaly detection (anomaly score timeline). | Should Have |
 
 # **5. Non-Functional Requirements**
@@ -257,8 +238,8 @@ Catatan implementasi: Model DeepLog dan dataset pelatihan (Wintrim) sudah dilati
 ## **5.1 Keamanan**
 
 * Seluruh inferensi LLM berjalan secara lokal — tidak ada data log yang dikirim ke layanan cloud pihak ketiga.
-* Private key RSA disimpan secara aman di server dan tidak diekspositkan via API.
 * Koneksi ke threat intelligence API (ThreatFox, VirusTotal, dll.) menggunakan HTTPS dengan API key yang dikonfigurasi di environment variable.
+* Kunci kriptografi yang diperlukan untuk operasi internal harus disimpan aman dan tidak diekspos melalui API.
 * Data log yang diunggah tidak dipersistensikan setelah sesi investigasi selesai (sesuai prinsip data minimization).
 
 ## **5.2 Performa**
@@ -268,7 +249,7 @@ Catatan implementasi: Model DeepLog dan dataset pelatihan (Wintrim) sudah dilati
 | Waktu parsing log | < 60 detik | 100.000 log lines |
 | Waktu inferensi DeepLog | < 30 detik | 10.000 sliding windows |
 | Waktu total pipeline (parse → laporan) | < 10 menit | File log tipikal skenario demonstrasi |
-| Waktu generasi tanda tangan digital | < 1 detik | Per laporan |
+ 
 
 ## **5.3 Portabilitas**
 
@@ -355,15 +336,9 @@ Sistem dievaluasi pada empat dimensi sesuai rumusan masalah penelitian:
 ## **7.2 Halaman Laporan Investigasi**
 
 * Tampilan laporan terstruktur dengan section-section (Executive Summary, IOC Analysis, Timeline, dll.).
-* Badge verifikasi tanda tangan digital: status VALID / INVALID dengan detail hash dan metadata.
-* Tombol unduh laporan (format PDF/JSON dengan tanda tangan tertanam).
-* Tombol masuk ke mode chatbot.
+* Tombol unduh laporan (format PDF/JSON).
 
-## **7.3 Mode Chatbot (RAG Read-Only)**
 
-* Interface chat standar (input teks + riwayat percakapan).
-* Banner/notifikasi yang jelas bahwa mode ini read-only dan hanya mengacu pada laporan yang dihasilkan.
-* Model tidak dapat mengakses data di luar laporan atau memanggil tool eksternal.
 
 # **8. Struktur Proyek yang Diharapkan**
 
@@ -379,12 +354,11 @@ Berikut adalah struktur folder yang direkomendasikan untuk proyek ini. Dataset D
 | models/drain/ | Konfigurasi Drain (drain\_config.ini, regex patterns) |
 | models/deeplog/ | Model DeepLog terlatih (DeepLog.pt), vocabulary (DeepLog.pkl) |
 | models/foundation\_sec/ | Foundation-Sec-8B model weights (GGUF/HF format) |
-| keys/ | RSA keypair (private.pem, public.pem) — gitignored |
 | backend/ | FastAPI application (main.py, routers/, services/) |
 | backend/modules/parsing/ | Drain wrapper dan preprocessing utilities |
 | backend/modules/anomaly/ | LogRobust inference pipeline |
 | backend/modules/agent/ | LangGraph graph definition, tool wrappers, memory |
-| backend/modules/report/ | Report generator, digital signature module |
+| backend/modules/report/ | Report generator module |
 | frontend/ | React application |
 | evaluation/ | DeepEval test scripts, SUS form, hasil evaluasi |
 | .env | API keys (ThreatFox, VirusTotal, dll.) — gitignored |
@@ -409,8 +383,7 @@ Berikut adalah struktur folder yang direkomendasikan untuk proyek ini. Dataset D
 | M2 | Integrasi DeepLog dari model yang sudah dilatih (Wintrim dataset), validasi inferensi pada EVTX samples | DeepLog inference pipeline, anomaly detection output JSON |
 | M3 | Implementasi LangGraph graph + 6 tool wrappers threat intelligence | AI Agent berjalan end-to-end dengan tool calls |
 | M4 | Integrasi Foundation-Sec-8B lokal + ReAct prompting | LLM reasoning + tool selection terintegrasi |
-| M5 | Report generator + digital signature (RSA+SHA-256) + React frontend | Laporan bertanda tangan digital + UI lengkap |
-| M6 | Chatbot RAG read-only | Mode chatbot fungsional, tool calling diblokir |
+| M5 | Report generator + React frontend | Laporan investigasi + UI lengkap |
 | M7 | Demonstrasi end-to-end dengan EVTX-ATTACK-SAMPLES | Demo fungsional terdokumentasi |
 | M8 | Evaluasi lengkap: Tool Correctness, G-Eval, Time Efficiency, SUS | Laporan evaluasi kuantitatif + analisis |
 

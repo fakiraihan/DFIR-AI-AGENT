@@ -5,9 +5,11 @@ Integrations for 6 threat intel APIs
 import requests
 import aiohttp
 import json
+from collections import OrderedDict
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 import time
+from urllib.parse import quote
 
 
 class ThreatIntelToolkit:
@@ -21,7 +23,8 @@ class ThreatIntelToolkit:
             api_keys: Dictionary with keys for each service
         """
         self.api_keys = api_keys
-        self.session_cache = {}  # Cache results per session
+        self.max_cache_entries = 512
+        self.session_cache = OrderedDict()  # Bounded cache results per session
     
     def _cache_key(self, tool_name: str, ioc: str) -> str:
         """Generate cache key"""
@@ -30,12 +33,18 @@ class ThreatIntelToolkit:
     def _get_cached(self, tool_name: str, ioc: str) -> Optional[Dict]:
         """Get cached result if available"""
         key = self._cache_key(tool_name, ioc)
-        return self.session_cache.get(key)
+        cached = self.session_cache.get(key)
+        if cached is not None:
+            self.session_cache.move_to_end(key)
+        return cached
     
     def _set_cache(self, tool_name: str, ioc: str, result: Dict):
         """Cache result"""
         key = self._cache_key(tool_name, ioc)
         self.session_cache[key] = result
+        self.session_cache.move_to_end(key)
+        while len(self.session_cache) > self.max_cache_entries:
+            self.session_cache.popitem(last=False)
     
     # ===== ThreatFox =====
     def threatfox_lookup(self, ioc: str, ioc_type: str = "ip") -> Dict[str, Any]:
@@ -67,13 +76,13 @@ class ThreatIntelToolkit:
         }
         
         headers = {}
-        # Add API key if available (optional but increases rate limits)
+        # abuse.ch requires Auth-Key for authenticated API access.
         api_key = self.api_keys.get("abusech_api_key")
         if api_key:
             headers["Auth-Key"] = api_key
-            print(f"    Auth: Using API key (first 8 chars: {api_key[:8]}...)")
+            print("    Auth: Using configured API key")
         else:
-            print(f"    Auth: No API key (Get free key at https://auth.abuse.ch/)")
+            print(f"    Auth: No API key configured (abuse.ch APIs require Auth-Key; get a free key at https://auth.abuse.ch/)")
         
         try:
             print(f"    Sending POST to {url}")
@@ -92,6 +101,13 @@ class ThreatIntelToolkit:
                 response_items = []
 
             response_items = [item for item in response_items if isinstance(item, dict)]
+            exact_response_items = self._filter_exact_ioc_matches(response_items, ioc)
+            if response_items and not exact_response_items:
+                print(f"    Exact IOC matches: 0 (ignored {len(response_items)} related/non-exact items)")
+                query_status = "no_exact_match"
+                response_items = []
+            elif exact_response_items:
+                response_items = exact_response_items
 
             print(f"    Query status: {query_status}")
             print(f"    Results: {len(response_items)} items")
@@ -138,6 +154,16 @@ class ThreatIntelToolkit:
                 "error": str(e),
                 "status": "error"
             }
+
+    def _filter_exact_ioc_matches(self, items: List[Dict[str, Any]], requested_ioc: str) -> List[Dict[str, Any]]:
+        """Keep ThreatFox rows that match the exact IOC requested."""
+        requested = requested_ioc.strip().lower().rstrip("/")
+        exact_matches = []
+        for item in items:
+            returned_ioc = str(item.get("ioc", "")).strip().lower().rstrip("/")
+            if returned_ioc == requested:
+                exact_matches.append(item)
+        return exact_matches
     
     # ===== MalwareBazaar =====
     def malwarebazaar_lookup(self, file_hash: str) -> Dict[str, Any]:
@@ -163,7 +189,7 @@ class ThreatIntelToolkit:
         }
         
         headers = {}
-        # Add API key if available (optional but increases rate limits)
+        # abuse.ch requires Auth-Key for authenticated API access.
         api_key = self.api_keys.get("abusech_api_key")
         if api_key:
             headers["Auth-Key"] = api_key
@@ -227,7 +253,7 @@ class ThreatIntelToolkit:
         }
         
         headers = {}
-        # Add API key if available (optional but increases rate limits)
+        # abuse.ch requires Auth-Key for authenticated API access.
         api_key = self.api_keys.get("abusech_api_key")
         if api_key:
             headers["Auth-Key"] = api_key
@@ -267,7 +293,8 @@ class ThreatIntelToolkit:
         
         Args:
             ioc: IOC value
-            ioc_type: IPv4, domain, hostname, url, md5, sha256
+            ioc_type: IPv4, domain, hostname, URL, url, md5, sha1, sha256,
+                file, FileHash-MD5, FileHash-SHA1, or FileHash-SHA256
             
         Returns:
             OTX threat intelligence
@@ -280,7 +307,9 @@ class ThreatIntelToolkit:
         if not api_key:
             return {"tool": "otx", "ioc": ioc, "error": "API key required (get free at otx.alienvault.com)", "status": "error"}
         
-        base_url = f"https://otx.alienvault.com/api/v1/indicators/{ioc_type}/{ioc}/general"
+        otx_ioc_type = self._normalize_otx_ioc_type(ioc_type)
+        encoded_ioc = quote(ioc, safe="")
+        base_url = f"https://otx.alienvault.com/api/v1/indicators/{otx_ioc_type}/{encoded_ioc}/general"
         headers = {"X-OTX-API-KEY": api_key}
         
         try:
@@ -291,7 +320,7 @@ class ThreatIntelToolkit:
             result = {
                 "tool": "alienvault_otx",
                 "ioc": ioc,
-                "ioc_type": ioc_type,
+                "ioc_type": otx_ioc_type,
                 "timestamp": datetime.now().isoformat(),
                 "pulse_count": data.get("pulse_info", {}).get("count", 0),
                 "pulses": data.get("pulse_info", {}).get("pulses", [])[:3],  # Top 3 pulses
@@ -309,6 +338,33 @@ class ThreatIntelToolkit:
                 "error": str(e),
                 "status": "error"
             }
+
+    def _normalize_otx_ioc_type(self, ioc_type: str) -> str:
+        """Map local IOC labels to AlienVault OTX indicator API types."""
+        normalized = (ioc_type or "").strip()
+        normalized_lower = normalized.lower()
+
+        if normalized in {"IPv4", "IPv6"}:
+            return normalized
+        if normalized in {"URL", "url"}:
+            return "url"
+        if normalized in {"FileHash-MD5", "FileHash-SHA1", "FileHash-SHA256"}:
+            return "file"
+
+        if normalized_lower in {"ip", "ipv4"}:
+            return "IPv4"
+        if normalized_lower == "ipv6":
+            return "IPv6"
+        if normalized_lower in {"domain", "hostname"}:
+            return normalized_lower
+        if normalized_lower == "url":
+            return "url"
+        if normalized_lower in {"md5", "sha1", "sha256"}:
+            return "file"
+        if normalized_lower in {"file", "hash", "filehash"}:
+            return "file"
+
+        return normalized or "IPv4"
     
     # ===== GreyNoise =====
     def greynoise_lookup(self, ip: str) -> Dict[str, Any]:
@@ -386,7 +442,7 @@ class ThreatIntelToolkit:
         
         # Determine endpoint
         if ioc_type == "ip":
-            endpoint = f"ip-addresses/{ioc}"
+            endpoint = f"ip_addresses/{ioc}"
         elif ioc_type == "domain":
             endpoint = f"domains/{ioc}"
         elif ioc_type == "url":
@@ -396,7 +452,7 @@ class ThreatIntelToolkit:
         elif ioc_type == "file":
             endpoint = f"files/{ioc}"
         else:
-            endpoint = f"ip-addresses/{ioc}"
+            endpoint = f"ip_addresses/{ioc}"
         
         url = f"https://www.virustotal.com/api/v3/{endpoint}"
         headers = {"x-apikey": api_key}

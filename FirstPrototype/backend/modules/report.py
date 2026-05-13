@@ -39,8 +39,15 @@ class ReportGenerator:
         severity = self._calculate_severity(tool_results, anomalies)
         generated_at = datetime.now().isoformat()
         ioc_analysis = self._build_ioc_analysis(iocs, tool_results)
+        contextual_recommendations = self._build_contextual_recommendations(
+            severity,
+            anomalies,
+            ioc_analysis,
+            tool_results,
+            timeline,
+        )
         recommendations = self._normalize_recommendations(
-            raw_recommendations or self._default_recommendations(severity),
+            contextual_recommendations + raw_recommendations,
             severity,
             anomalies,
             ioc_analysis,
@@ -112,7 +119,15 @@ class ReportGenerator:
         recommendations: List[str],
     ) -> str:
         cleaned_summary = self._clean_text(summary_text)
-        if cleaned_summary and not self._is_low_quality_summary(cleaned_summary):
+        if cleaned_summary and not self._is_low_quality_summary(
+            cleaned_summary
+        ) and self._summary_matches_evidence(
+            cleaned_summary,
+            anomalies,
+            ioc_analysis,
+            tool_results,
+            timeline,
+        ):
             return cleaned_summary
 
         executed_tool_results = [
@@ -383,18 +398,86 @@ class ReportGenerator:
             return f"{tool_name}: permintaan enrichment melebihi batas waktu"
         return f"{tool_name}: enrichment sementara tidak tersedia"
 
-    def _default_recommendations(self, severity: str) -> List[str]:
-        base = [
-            "Validasi host, akun, dan proses terkait terhadap inventaris aset lokal.",
-            "Pertahankan log dan artefak host terdampak untuk analisis forensik lanjutan.",
-            "Monitor IOC terkait dan aktivitas serupa setidaknya selama 24 jam berikutnya.",
+    def _build_contextual_recommendations(
+        self,
+        severity: str,
+        anomalies: List[Dict[str, Any]],
+        ioc_analysis: List[Dict[str, Any]],
+        tool_results: List[Dict[str, Any]],
+        timeline: List[Dict[str, Any]],
+    ) -> List[str]:
+        recommendations: List[str] = []
+        malicious_iocs = [
+            ioc for ioc in ioc_analysis if ioc.get("threat_level") == "high"
         ]
-        if severity == "HIGH":
+        suspicious_iocs = [
+            ioc for ioc in ioc_analysis if ioc.get("threat_level") == "medium"
+        ]
+        top_anomaly = self._select_priority_anomaly(anomalies)
+        anomaly_context = self._format_anomaly_context(top_anomaly)
+        affected_artifacts = self._collect_affected_artifacts(anomalies)
+
+        if severity in {"CRITICAL", "HIGH"} and (malicious_iocs or anomalies):
+            scope = self._format_ioc_values(malicious_iocs[:3]) or anomaly_context
+            recommendations.append(
+                f"Segera lakukan containment pada aset yang terkait dengan {scope} karena severity laporan berada pada level {severity}."
+            )
+
+        if malicious_iocs:
+            recommendations.append(
+                f"Blokir dan hunt IOC malicious berikut pada firewall, proxy, EDR, dan SIEM: {self._format_ioc_values(malicious_iocs[:5])}."
+            )
+
+        if suspicious_iocs:
+            recommendations.append(
+                f"Validasi IOC suspicious berikut sebelum eskalasi: {self._format_ioc_values(suspicious_iocs[:5])}; korelasikan dengan host, user, dan timestamp pada window sumbernya."
+            )
+
+        if top_anomaly:
+            recommendations.append(
+                f"Triase window DeepLog prioritas {anomaly_context}; cek process tree, user, parent process, command line, dan raw event di sekitar window tersebut."
+            )
+
+        if affected_artifacts:
+            recommendations.append(
+                f"Kumpulkan artefak host yang terkait dengan {affected_artifacts}: event log lengkap, process execution evidence, registry/persistence keys, dan network connection history."
+            )
+
+        if timeline:
+            recommendations.append(
+                f"Rekonstruksi urutan kejadian dari {len(timeline)} item timeline untuk memastikan apakah aktivitas anomali membentuk rantai serangan atau kejadian terpisah."
+            )
+
+        if anomalies and not malicious_iocs and not suspicious_iocs:
+            recommendations.append(
+                f"Karena belum ada IOC dengan reputasi malicious/suspicious, validasi {len(anomalies)} anomali DeepLog terhadap baseline operasional agar false positive bisa dipisahkan dari aktivitas baru yang belum dikenal threat intel."
+            )
+
+        if tool_results and not any(
+            self._is_malicious_result(result) or self._is_suspicious_result(result)
+            for result in tool_results
+        ):
+            recommendations.append(
+                "Perluas enrichment IOC dengan sumber internal seperti EDR, DNS, proxy, dan asset inventory karena lookup eksternal belum memberi konfirmasi kuat."
+            )
+
+        if not recommendations:
+            recommendations.append(
+                "Tidak ada deteksi prioritas pada data saat ini; simpan laporan sebagai baseline dan lanjutkan monitoring rutin terhadap pola log yang sama."
+            )
+
+        return recommendations
+
+    def _default_recommendations(self, severity: str) -> List[str]:
+        if severity in {"CRITICAL", "HIGH"}:
             return [
-                "Isolasi endpoint yang terindikasi terdampak dari jaringan produksi.",
-                "Blok IOC yang telah terkonfirmasi malicious pada kontrol perimeter yang relevan.",
-            ] + base
-        return base
+                f"Prioritaskan containment dan validasi forensik karena severity laporan adalah {severity}.",
+                "Korelasikan anomali utama dengan host, user, proses, dan koneksi jaringan sebelum menutup insiden.",
+            ]
+        return [
+            "Validasi anomali utama terhadap baseline operasional sebelum menyatakan false positive.",
+            "Pertahankan log dan artefak terkait agar triase lanjutan tetap dapat diaudit.",
+        ]
 
     def _normalize_recommendations(
         self,
@@ -429,6 +512,91 @@ class ReportGenerator:
 
         return normalized[:8]
 
+    def _select_priority_anomaly(
+        self, anomalies: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        if not anomalies:
+            return {}
+
+        def priority(anomaly: Dict[str, Any]) -> Tuple[float, int]:
+            score = anomaly.get("anomaly_score") or anomaly.get("score") or 0
+            try:
+                numeric_score = float(score)
+            except (TypeError, ValueError):
+                numeric_score = 0.0
+            return numeric_score, int(bool(anomaly.get("strict_is_anomaly")))
+
+        return max(anomalies, key=priority)
+
+    def _format_anomaly_context(self, anomaly: Dict[str, Any]) -> str:
+        if not anomaly:
+            return "window anomali prioritas"
+
+        parts = [f"window {anomaly.get('window_id', '-')}"]
+        score = anomaly.get("anomaly_score") or anomaly.get("score")
+        if score is not None:
+            try:
+                parts.append(f"score {float(score):.3f}")
+            except (TypeError, ValueError):
+                parts.append(f"score {score}")
+
+        event = str(anomaly.get("actual_event") or "").strip()
+        if event:
+            parts.append(f"event `{event[:120]}`")
+
+        return " / ".join(parts)
+
+    def _collect_affected_artifacts(self, anomalies: List[Dict[str, Any]]) -> str:
+        values: List[str] = []
+        keys = [
+            "image",
+            "command_line",
+            "parent_image",
+            "target_object",
+            "destination_ip",
+            "query_name",
+            "user",
+        ]
+
+        for anomaly in anomalies:
+            anomalous_line = anomaly.get("anomalous_line") or {}
+            if isinstance(anomalous_line, dict):
+                fields = anomalous_line.get("important_fields") or {}
+                if isinstance(fields, dict):
+                    for key in keys:
+                        value = fields.get(key)
+                        if value:
+                            values.append(f"{key}={value}")
+
+            indicators = anomaly.get("window_key_indicators") or {}
+            if isinstance(indicators, dict):
+                for key in keys:
+                    for value in indicators.get(key) or []:
+                        if value:
+                            values.append(f"{key}={value}")
+
+        deduped = []
+        seen = set()
+        for value in values:
+            key = value.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(value)
+            if len(deduped) >= 4:
+                break
+
+        return ", ".join(deduped)
+
+    def _format_ioc_values(self, iocs: List[Dict[str, Any]]) -> str:
+        values = []
+        for ioc in iocs:
+            ioc_type = ioc.get("type", "ioc")
+            value = ioc.get("value")
+            if value:
+                values.append(f"{ioc_type} `{value}`")
+        return ", ".join(values)
+
     def _clean_recommendation(self, text: str) -> str:
         cleaned = self._clean_text(text)
         cleaned = re.sub(r"^[^A-Za-zÀ-ÿ0-9]+", "", cleaned).strip()
@@ -461,6 +629,11 @@ class ReportGenerator:
             r"recommended actions",
             r"mitre att&ck mapping",
             r"appendix \(jika perlu\)",
+            r"tanggal serangan\s*:",
+            r"jenis serangan\s*:\s*malware atau phishing",
+            r"nama korban\s*:",
+            r"data sensitif dicuri",
+            r"windows server 2019",
         ]
         lowered = text.lower()
         if len(text.strip()) < 80:
@@ -481,6 +654,91 @@ class ReportGenerator:
             re.search(pattern, lowered, flags=re.IGNORECASE)
             for pattern in placeholder_patterns
         )
+
+    def _summary_matches_evidence(
+        self,
+        text: str,
+        anomalies: List[Dict[str, Any]],
+        ioc_analysis: List[Dict[str, Any]],
+        tool_results: List[Dict[str, Any]],
+        timeline: List[Dict[str, Any]],
+    ) -> bool:
+        evidence_terms = self._summary_evidence_terms(
+            anomalies, ioc_analysis, tool_results, timeline
+        )
+        if not evidence_terms:
+            return True
+
+        lowered = text.lower()
+        observed_ips = {
+            term for term in evidence_terms if re.fullmatch(r"(?:\d{1,3}\.){3}\d{1,3}", term)
+        }
+        summary_ips = set(re.findall(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", text))
+        if any(ip not in observed_ips for ip in summary_ips):
+            return False
+
+        matched_terms = [term for term in evidence_terms if term.lower() in lowered]
+        return len(matched_terms) >= 1
+
+    def _summary_evidence_terms(
+        self,
+        anomalies: List[Dict[str, Any]],
+        ioc_analysis: List[Dict[str, Any]],
+        tool_results: List[Dict[str, Any]],
+        timeline: List[Dict[str, Any]],
+    ) -> List[str]:
+        terms: List[str] = []
+
+        for anomaly in anomalies:
+            window_id = anomaly.get("window_id")
+            if window_id is not None:
+                terms.append(f"window {window_id}")
+            actual_event = str(anomaly.get("actual_event") or "").strip()
+            if actual_event:
+                terms.append(actual_event)
+
+            anomalous_line = anomaly.get("anomalous_line") or {}
+            if isinstance(anomalous_line, dict):
+                fields = anomalous_line.get("important_fields") or {}
+                if isinstance(fields, dict):
+                    terms.extend(str(value).strip() for value in fields.values() if value)
+
+            indicators = anomaly.get("window_key_indicators") or {}
+            if isinstance(indicators, dict):
+                for values in indicators.values():
+                    if isinstance(values, list):
+                        terms.extend(str(value).strip() for value in values if value)
+
+        for ioc in ioc_analysis:
+            value = str(ioc.get("value") or "").strip()
+            if value:
+                terms.append(value)
+
+        for result in tool_results:
+            for key in ["ioc", "ip", "url", "hash", "domain"]:
+                value = str(result.get(key) or "").strip()
+                if value:
+                    terms.append(value)
+
+        for event in timeline:
+            for key in ["event", "event_template", "description", "details"]:
+                value = str(event.get(key) or "").strip()
+                if value:
+                    terms.append(value)
+
+        deduped = []
+        seen = set()
+        for term in terms:
+            cleaned = re.sub(r"\s+", " ", term).strip(" `.,;:()[]{}")
+            if len(cleaned) < 4:
+                continue
+            key = cleaned.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(cleaned)
+
+        return deduped[:80]
 
     def _top_anomalous_events(self, anomalies: List[Dict[str, Any]]) -> str:
         events = [
@@ -563,7 +821,7 @@ class ReportGenerator:
             return False
         return (
             tool_result.get("classification") == "malicious"
-            or int(tool_result.get("malicious", 0) or 0) > 0
+            or self._safe_positive_count(tool_result.get("malicious")) > 0
         )
 
     def _is_suspicious_result(self, tool_result: Dict[str, Any]) -> bool:
@@ -571,8 +829,14 @@ class ReportGenerator:
             return False
         return (
             tool_result.get("classification") == "suspicious"
-            or int(tool_result.get("suspicious", 0) or 0) > 0
+            or self._safe_positive_count(tool_result.get("suspicious")) > 0
         )
+
+    def _safe_positive_count(self, value: Any) -> int:
+        try:
+            return max(int(value or 0), 0)
+        except (TypeError, ValueError):
+            return 0
 
     def _normalize_ioc_value(self, value: Any) -> str:
         return str(value).strip() if value is not None else ""

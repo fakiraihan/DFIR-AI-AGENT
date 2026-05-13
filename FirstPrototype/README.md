@@ -5,31 +5,63 @@ Sistem otomatisasi investigasi insiden siber menggunakan AI Agent berbasis LangG
 ## 📋 Fitur Utama
 
 - ✅ **Log Parsing**: Drain algorithm untuk ekstraksi template dari Windows EVTX, Sysmon, Linux logs
-- ✅ **Anomaly Detection**: DeepLog (LSTM) terlatih pada 996k normal Windows logs
+- ✅ **Anomaly Detection**: DeepLog (LSTM) runtime lokal dengan artifact general + sysmon yang configurable
 - ✅ **AI Agent**: LangGraph orchestration dengan Foundation-Sec-8B (local inference)
 - ✅ **Threat Intelligence**: 6 API integrations (ThreatFox, MalwareBazaar, URLHaus, OTX, GreyNoise, VirusTotal)
+- ✅ **React Frontend**: Web UI untuk upload, progress investigasi, review laporan, dan export
 - ⏳ **RAG Chatbot**: Query laporan investigasi (coming soon)
-- ⏳ **React Frontend**: Web UI untuk upload dan visualisasi (coming soon)
 
 ## 📁 Struktur Proyek
 
 ```
 FirstPrototype/
 ├── backend/
-│   ├── main.py                    # FastAPI application
+│   ├── main.py                    # FastAPI app wiring + router registration
+│   ├── app_context.py             # Shared paths, settings, and session store
 │   ├── config.py                  # Configuration management
+│   ├── session_store.py           # Disk-backed investigation session storage
 │   ├── requirements.txt           # Python dependencies
-│   ├── test_pipeline.py           # Full pipeline test
-│   └── modules/
-│       ├── parsing.py             # Drain log parser
-│       ├── anomaly.py             # DeepLog anomaly detection
-│       ├── agent.py               # LangGraph AI agent
-│       ├── threat_intel.py        # Threat intel tool wrappers
-│       └── report.py              # Report generation
+│   ├── routers/                   # HTTP/API boundary per domain
+│   │   ├── health.py              # Root health endpoint
+│   │   ├── upload.py              # /api/upload and /api/analyze
+│   │   ├── investigation.py       # /api/investigate, /api/status, /api/report
+│   │   └── settings.py            # /api/settings/llm endpoints
+│   ├── services/                  # Application services used by routers/pipeline
+│   │   ├── analyze_service.py     # Quick parse + DeepLog analysis for /api/analyze
+│   │   ├── llm_service.py         # LLM provider readiness and client construction
+│   │   ├── storage_service.py     # Upload validation, sanitization, file save
+│   │   ├── parsing_service.py     # Parser profile selection + Drain wrapper
+│   │   └── orchestrator_service.py # End-to-end investigation pipeline
+│   ├── schemas/                   # Pydantic request/response contracts
+│   │   └── llm.py                 # LLM settings payload schemas
+│   ├── modules/                   # DFIR domain implementations
+│   │   ├── parsing.py             # Drain log parser
+│   │   ├── anomaly.py             # DeepLog anomaly detection
+│   │   ├── agent.py               # LangGraph AI agent
+│   │   ├── threat_intel.py        # Threat intel tool wrappers
+│   │   ├── llm_filter.py          # Batch LLM anomaly gate
+│   │   ├── llm_provider.py        # LLM provider abstraction/health checks
+│   │   ├── gate_observations.py   # Gate observation telemetry
+│   │   └── report.py              # Report generation
+│   └── test_*.py                  # Backend unit/regression tests
+├── frontend/                      # React analyst workspace
 ├── data/                          # Uploaded logs (temporary)
 ├── output/                        # Investigation reports
 └── models/                        # Model references
 ```
+
+### Backend Modularization Notes
+
+Backend sengaja dipisahkan agar lebih mudah untuk checking dan audit:
+
+- `routers/` memuat kontrak HTTP/API sehingga endpoint sensitif mudah diaudit dan diberi kontrol tambahan seperti auth/rate limit.
+- `services/analyze_service.py` memuat quick analysis (`/api/analyze`) agar router tidak berisi logic sampling, summary, dan formatting response.
+- `services/llm_service.py` memusatkan readiness check dan client construction untuk provider LLM.
+- `services/storage_service.py` menjadi satu tempat untuk validasi upload, sanitasi filename, limit ukuran file, dan penyimpanan file.
+- `services/parsing_service.py` menjadi satu tempat untuk pemilihan profile parser/model (`general` vs `sysmon`).
+- `services/orchestrator_service.py` menyimpan alur investigasi penuh: parsing → DeepLog → LLM gate → DFIR agent → report.
+- `modules/` tetap berisi implementasi domain berat seperti parser, detector, agent, threat intel, dan report generator.
+- `main.py` hanya membuat app, memasang CORS, dan mendaftarkan router; beberapa export lama tetap dijaga untuk kompatibilitas test.
 
 ## 🚀 Quick Start
 
@@ -37,7 +69,7 @@ FirstPrototype/
 
 - Python 3.10+
 - Ollama dengan model Foundation-Sec-8B
-- DeepLog model terlatih (dari LogADEmpirical-dev)
+- DeepLog runtime artifact `.pt` + `.pkl` untuk profile general dan/atau sysmon
 - CUDA-capable GPU (opsional, untuk performa lebih baik)
 
 ### 2. Setup Ollama & Foundation-Sec-8B
@@ -133,15 +165,8 @@ Response:
 ```json
 {
   "session_id": "session_20260228_103045",
-  "status": "completed",
-  "message": "Investigation completed successfully",
-  "summary": {
-    "parsed_logs": 4313,
-    "templates": 156,
-    "anomalies": 42,
-    "severity": "HIGH",
-    "report_id": "DFIR-20260228-103145"
-  }
+  "status": "processing",
+  "message": "Investigation started in background. Check /api/status/{session_id} for progress."
 }
 ```
 
@@ -160,11 +185,14 @@ curl "http://localhost:8000/api/report/session_20260228_103045"
 ## 📊 Model & Dataset Info
 
 ### DeepLog Model
-- **Location**: `d:/FAKI/LogADEmpirical-dev/output/Wintrim/sliding/W10_S5_CFalse_train0.8/models/DeepLog.pt`
-- **Training Data**: 996,699 normal Windows CBS logs (Wintrim dataset)
+- **Runtime Code**: berada di `FirstPrototype/backend/logadempirical/`
+- **Artifact Location**: configurable via `backend/.env` atau `backend/config.py`
+- **Default Runtime Artifact**: LMD-2023 2.3M per-host DeepLog (`D:\FAKI\NEWMLMODL\output_lmd2023_2_3m_per_host\lmd2023\sliding\W20_S20_CTrue_train0.8_per_host_chronological\`)
+- **General + Sysmon Profiles**: keduanya diarahkan ke artifact LMD-2023 2.3M per-host; Sysmon tetap memakai parser template strategy `provider_eventid`
 - **Architecture**: LSTM (embedding=128, hidden=128, layers=2)
-- **Detection Method**: Top-k prediction (k=9)
-- **Performance**: 100% detection rate pada EVTX attack samples
+- **Detection Method**: Top-k next-event prediction (default runtime `k=3`, window/history size `10`)
+- **Evaluation Note**: balanced eval top-k `3` menghasilkan F1 `0.9489`, recall `0.9151`, specificity `0.9877`, FPR `0.0123`; lihat `D:\FAKI\NEWMLMODL\output_lmd2023_2_3m_per_host\lmd2023_2_3m_per_host_fair_eval_report.md`
+- **Output Semantics**: candidate anomaly / suspicious sequence deviation, bukan verdict final compromise
 
 ### Test Dataset
 - **Location**: `d:/FAKI/LogADEmpirical-dev/EVTX-ATTACK-SAMPLES/`
@@ -188,8 +216,8 @@ VIRUSTOTAL_API_KEY=your_key_here
 
 # DeepLog Parameters
 DEEPLOG_WINDOW_SIZE=10
-DEEPLOG_STEP_SIZE=5
-DEEPLOG_TOPK=9
+DEEPLOG_STEP_SIZE=1
+DEEPLOG_TOPK=3
 ```
 
 ## 📖 API Documentation
@@ -214,8 +242,8 @@ Error: Could not connect to Ollama
 Error: Model path not found
 ```
 **Solution**:
-1. Train DeepLog model terlebih dahulu di LogADEmpirical-dev
-2. Atau update path di config.py
+1. Pastikan file artifact `.pt` dan `.pkl` tersedia untuk profile yang dipakai
+2. Update path di `.env` atau `config.py`
 
 ### Memory Error
 ```
@@ -245,13 +273,10 @@ RuntimeError: CUDA out of memory
 
 ### Running Tests
 ```bash
-# Test individual modules
-python modules/parsing.py
-python modules/anomaly.py
-python modules/agent.py
-python modules/report.py
+# Run all backend unit/regression tests
+python -m unittest discover -s . -p "test_*.py"
 
-# Test full pipeline
+# Run full pipeline test directly
 python test_pipeline.py
 ```
 
@@ -272,4 +297,4 @@ Politeknik Siber dan Sandi Negara
 
 ---
 
-**Status**: ✅ Backend Complete | ⏳ Frontend In Progress | ⏳ RAG Chatbot Planned
+**Status**: ✅ Backend Modularized | ✅ Frontend Available | ⏳ RAG Chatbot Planned

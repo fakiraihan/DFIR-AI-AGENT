@@ -102,13 +102,16 @@ def build_llm_client(provider_settings: Dict[str, Any], role: str = "agent") -> 
 
     if provider == "ollama":
         base_url = provider_settings.get("base_url", "http://localhost:11434")
-        temperature = 0.2 if role == "filter" else 0.4
+        temperature = 0.1
         return Ollama(
             base_url=base_url,
             model=model,
             temperature=temperature,
-            top_p=0.9,
-            top_k=40,
+            top_p=0.7,
+            top_k=20,
+            num_ctx=4096,
+            num_predict=2048,
+            repeat_penalty=1.15,
         )
 
     if provider == "gemini":

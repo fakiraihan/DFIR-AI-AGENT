@@ -76,6 +76,56 @@ class LLMAnomalyFilterTest(unittest.TestCase):
         self.assertEqual(len(result_df), len(input_df))
         self.assertTrue((result_df["llm_gate_policy"] == "keep_all").all())
 
+    def test_prioritize_critical_uses_requested_window_ids(self):
+        fake_llm = FakeLLM(
+            '{"recommended_action":"prioritize_critical","priority_window_ids":[2],"confidence":0.81,"reason":"window 2 perlu prioritas"}'
+        )
+        anomaly_filter = LLMAnomalyFilter(llm=fake_llm)
+
+        result_df = anomaly_filter.filter_anomalies(
+            self._build_anomalies_df(), pd.DataFrame()
+        )
+
+        self.assertEqual(len(result_df), 1)
+        self.assertEqual(int(result_df.iloc[0]["window_id"]), 2)
+        self.assertEqual(result_df.iloc[0]["llm_gate_policy"], "prioritize_critical")
+        self.assertEqual(result_df.iloc[0]["llm_gate_priority"], "critical_priority")
+        self.assertEqual(float(result_df.iloc[0]["llm_gate_confidence"]), 0.81)
+
+    def test_request_more_context_keeps_all_and_marks_context_need(self):
+        fake_llm = FakeLLM(
+            '{"recommended_action":"request_more_context","requested_context":"butuh parent process","confidence":0.64,"reason":"konteks proses kurang"}'
+        )
+        anomaly_filter = LLMAnomalyFilter(llm=fake_llm)
+
+        result_df = anomaly_filter.filter_anomalies(
+            self._build_anomalies_df(), pd.DataFrame()
+        )
+
+        self.assertEqual(len(result_df), 2)
+        self.assertTrue((result_df["llm_gate_policy"] == "request_more_context").all())
+        self.assertTrue(
+            (result_df["llm_gate_requested_context"] == "butuh parent process").all()
+        )
+        self.assertTrue((result_df["llm_gate_priority"] == "needs_more_context").all())
+
+    def test_skip_low_signal_with_note_keeps_high_signal_only(self):
+        fake_llm = FakeLLM(
+            '{"recommended_action":"skip_low_signal_with_note","reason":"drop window noise rendah"}'
+        )
+        anomaly_filter = LLMAnomalyFilter(llm=fake_llm)
+
+        result_df = anomaly_filter.filter_anomalies(
+            self._build_anomalies_df(), pd.DataFrame()
+        )
+
+        self.assertEqual(len(result_df), 1)
+        self.assertEqual(int(result_df.iloc[0]["window_id"]), 1)
+        self.assertEqual(
+            result_df.iloc[0]["llm_gate_policy"], "skip_low_signal_with_note"
+        )
+        self.assertTrue(bool(result_df.iloc[0]["llm_gate_active"]))
+
 
 if __name__ == "__main__":
     unittest.main()

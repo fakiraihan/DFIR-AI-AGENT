@@ -2,19 +2,19 @@ import unittest
 
 from fastapi.testclient import TestClient
 
-from main import app, active_sessions
+from main import app, session_store
 
 
 class InvestigationStatusApiTest(unittest.TestCase):
     def setUp(self):
-        active_sessions.clear()
+        session_store.clear()
         self.client = TestClient(app)
 
     def tearDown(self):
-        active_sessions.clear()
+        session_store.clear()
 
     def test_status_endpoint_returns_lightweight_payload(self):
-        active_sessions["session_test"] = {
+        session_store.set_session("session_test", {
             "file_name": "sample.evtx",
             "status": "processing",
             "stage": "ai_agent",
@@ -26,7 +26,7 @@ class InvestigationStatusApiTest(unittest.TestCase):
             "anomalies_count": 6,
             "report": {"metadata": {"report_id": "secret-report"}},
             "traceback": "should-not-leak",
-        }
+        })
 
         response = self.client.get("/api/status/session_test")
 

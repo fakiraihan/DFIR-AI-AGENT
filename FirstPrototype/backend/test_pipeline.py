@@ -9,6 +9,8 @@ from pathlib import Path
 # Add backend to path
 sys.path.insert(0, str(Path(__file__).parent))
 
+from config import settings
+from main import _parse_with_profile, _resolve_config_path
 from modules.parsing import parse_log_file
 from modules.anomaly import detect_anomalies_in_logs
 from modules.agent import DFIRAgent
@@ -24,41 +26,32 @@ def test_full_pipeline():
 
     # Paths
     base_dir = Path(__file__).parent.parent
-    training_dir = base_dir.parent / "NEWMLMODL"
-
-    # Test file from latest training workspace
-    test_file = training_dir / "eventlog.csv"
+    artifact_test_file = base_dir.parent / "NEWMLMODL" / "eventlog.csv"
+    local_test_file = base_dir.parent / "eventlog.csv"
+    test_file = artifact_test_file if artifact_test_file.exists() else local_test_file
 
     if not test_file.exists():
         print(f"❌ Test file not found: {test_file}")
-        print("Please ensure eventlog.csv is available in NEWMLMODL folder")
+        print("Please ensure a representative Windows Event Log sample is available")
         return
 
-    # Model paths
-    model_path = (
-        training_dir
-        / "output"
-        / "eventlog"
-        / "sliding"
-        / "W20_S1_CFalse_train0.8"
-        / "models"
-        / "DeepLog.pt"
+    _, _, selected_profile = _parse_with_profile(str(test_file), settings, max_lines=500)
+    model_path = _resolve_config_path(
+        settings.sysmon_deeplog_model_path
+        if selected_profile["name"] == "sysmon"
+        else settings.deeplog_model_path
     )
-    vocab_path = (
-        training_dir
-        / "output"
-        / "eventlog"
-        / "sliding"
-        / "W20_S1_CFalse_train0.8"
-        / "vocabs"
-        / "DeepLog.pkl"
+    vocab_path = _resolve_config_path(
+        settings.sysmon_deeplog_vocab_path
+        if selected_profile["name"] == "sysmon"
+        else settings.deeplog_vocab_path
     )
 
     if not model_path.exists() or not vocab_path.exists():
         print(f"❌ DeepLog model not found")
         print(f"Model path: {model_path}")
         print(f"Vocab path: {vocab_path}")
-        print("Please train DeepLog model first using NEWMLMODL")
+        print("Please provide accessible DeepLog runtime artifacts")
         return
 
     print(f"\n✅ Test file: {test_file.name}")
@@ -69,15 +62,10 @@ def test_full_pipeline():
     print("STAGE 1: LOG PARSING (Drain)")
     print("-" * 80)
 
-    parsed_df, templates = parse_log_file(
-        str(test_file),
-        depth=4,
-        sim_threshold=0.5,
-        max_children=100,
-        template_strategy="drain",
-    )
+    parsed_df, templates, selected_profile = _parse_with_profile(str(test_file), settings)
 
     print(f"\n✅ Parsing completed:")
+    print(f"   - Profile: {selected_profile['name']}")
     print(f"   - Total logs: {len(parsed_df)}")
     print(f"   - Unique templates: {len(templates)}")
 
@@ -90,9 +78,9 @@ def test_full_pipeline():
         parsed_df,
         str(model_path),
         str(vocab_path),
-        window_size=20,
-        step_size=1,
-        topk=10,
+        window_size=selected_profile["window_size"],
+        step_size=settings.deeplog_step_size,
+        topk=settings.deeplog_topk,
     )
 
     print(f"\n✅ Anomaly detection completed:")

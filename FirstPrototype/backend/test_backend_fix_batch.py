@@ -1,15 +1,34 @@
 import io
+import json
+import pickle
 import shutil
+import tempfile
 import unittest
 from contextlib import redirect_stdout
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
+import pandas as pd
+import torch
 from fastapi.testclient import TestClient
 
-from main import DATA_DIR, active_sessions, app, settings
+from main import (
+    DATA_DIR,
+    _parse_with_profile,
+    _resolve_config_path,
+    app,
+    session_store,
+    settings,
+)
+from logadempirical.data.vocab import Vocab
+from logadempirical.models.lstm import DeepLog
+from session_store import SessionStore
 from modules.agent import DFIRAgent
+from modules.anomaly import DeepLogDetector
+from modules.gate_observations import append_gate_observations, summarize_downstream_metrics
 from modules.llm_provider import LLMProviderError
+from modules.parsing import parse_log_file
 from modules.report import ReportGenerator
 from modules.threat_intel import ThreatIntelToolkit
 
@@ -36,17 +55,17 @@ class FakeResponse:
 
 class BackendFixBatchTest(unittest.TestCase):
     def setUp(self):
-        active_sessions.clear()
+        session_store.clear()
         self.client = TestClient(app)
         self.original_max_upload_size_mb = settings.max_upload_size_mb
 
     def tearDown(self):
         settings.max_upload_size_mb = self.original_max_upload_size_mb
-        for session_id in list(active_sessions):
+        for session_id in list(session_store):
             session_dir = DATA_DIR / session_id
             if session_dir.exists():
                 shutil.rmtree(session_dir, ignore_errors=True)
-        active_sessions.clear()
+        session_store.clear()
 
     def test_upload_rejects_oversized_file_with_client_error(self):
         settings.max_upload_size_mb = 0
@@ -57,7 +76,7 @@ class BackendFixBatchTest(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 413)
-        self.assertEqual(active_sessions, {})
+        self.assertEqual(len(session_store), 0)
 
     def test_upload_sanitizes_filename_and_generates_unique_session_ids(self):
         response_one = self.client.post(
@@ -78,17 +97,19 @@ class BackendFixBatchTest(unittest.TestCase):
         self.assertEqual(payload_two["file_name"], "bad_name_.log")
         self.assertNotEqual(payload_one["session_id"], payload_two["session_id"])
 
-        stored_path = Path(active_sessions[payload_one["session_id"]]["file_path"])
+        stored_path = Path(
+            session_store.get_session(payload_one["session_id"], touch=False)["file_path"]
+        )
         self.assertEqual(stored_path.name, "bad_name_.log")
         self.assertEqual(stored_path.parent.parent, DATA_DIR)
 
     def test_start_investigation_preserves_provider_readiness_as_client_error(self):
-        active_sessions["session_test"] = {
+        session_store.set_session("session_test", {
             "file_name": "sample.log",
             "file_path": str(DATA_DIR / "session_test" / "sample.log"),
             "status": "uploaded",
             "stage": "pending",
-        }
+        })
 
         with (
             patch(
@@ -104,6 +125,291 @@ class BackendFixBatchTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("provider unavailable", response.json()["detail"])
+
+    def test_session_store_persists_and_cleans_stale_raw_log_directories(self):
+        cache_dir = DATA_DIR.parent / "test_session_store_cache"
+        raw_logs_dir = DATA_DIR.parent / "test_session_store_raw_logs"
+        shutil.rmtree(cache_dir, ignore_errors=True)
+        shutil.rmtree(raw_logs_dir, ignore_errors=True)
+        raw_logs_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            store = SessionStore(cache_dir, raw_logs_dir, session_timeout_minutes=1)
+            store.set_session("persisted", {"status": "uploaded"})
+
+            reopened = SessionStore(cache_dir, raw_logs_dir, session_timeout_minutes=1)
+            self.assertEqual(
+                reopened.get_session("persisted", touch=False),
+                {"status": "uploaded"},
+            )
+
+            active_dir = raw_logs_dir / "persisted"
+            stale_dir = raw_logs_dir / "stale_session"
+            active_dir.mkdir(exist_ok=True)
+            stale_dir.mkdir(exist_ok=True)
+
+            stale_timestamp = datetime.now().timestamp() - 3600
+            import os
+
+            os.utime(stale_dir, (stale_timestamp, stale_timestamp))
+            reopened.cleanup_expired_sessions()
+
+            self.assertTrue(active_dir.exists())
+            self.assertFalse(stale_dir.exists())
+        finally:
+            shutil.rmtree(cache_dir, ignore_errors=True)
+            shutil.rmtree(raw_logs_dir, ignore_errors=True)
+
+    def test_parse_csv_falls_back_to_local_drain_when_training_workspace_missing(self):
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".csv", delete=False, encoding="utf-8"
+        ) as tmp:
+            tmp.write("TimeGenerated,Message\n")
+            tmp.write('2026-04-21T10:00:00Z,"Process started pid=1234 user=alice"\n')
+            tmp.write('2026-04-21T10:00:01Z,"Process started pid=5678 user=bob"\n')
+            csv_path = tmp.name
+
+        try:
+            with patch(
+                "modules.parsing._resolve_training_workspace",
+                side_effect=FileNotFoundError("missing workspace"),
+            ):
+                parsed_df, templates = parse_log_file(csv_path)
+
+            self.assertEqual(len(parsed_df), 2)
+            self.assertGreaterEqual(len(templates), 1)
+            self.assertIn("event_template", parsed_df.columns)
+            self.assertIn("parameter_map", parsed_df.columns)
+        finally:
+            Path(csv_path).unlink(missing_ok=True)
+
+    def test_parse_with_profile_keeps_general_for_non_sysmon_logs(self):
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".csv", delete=False, encoding="utf-8"
+        ) as tmp:
+            tmp.write("TimeGenerated,Message\n")
+            tmp.write('2026-04-21T10:00:00Z,"Windows Event Log started"\n')
+            tmp.write('2026-04-21T10:00:01Z,"Service Control Manager event"\n')
+            csv_path = tmp.name
+
+        try:
+            parsed_df, templates, profile = _parse_with_profile(csv_path, settings, max_lines=50)
+            self.assertEqual(profile["name"], "general")
+            self.assertEqual(profile["template_strategy"], settings.parser_template_strategy)
+            self.assertGreaterEqual(len(parsed_df), 2)
+            self.assertGreaterEqual(len(templates), 1)
+        finally:
+            Path(csv_path).unlink(missing_ok=True)
+
+    def test_general_profile_uses_lmd2023_artifacts(self):
+        model_path = _resolve_config_path(settings.deeplog_model_path)
+        vocab_path = _resolve_config_path(settings.deeplog_vocab_path)
+
+        self.assertIn("lmd2023", str(model_path).lower())
+        self.assertIn("lmd2023", str(vocab_path).lower())
+        self.assertTrue(model_path.exists())
+        self.assertTrue(vocab_path.exists())
+
+    def test_parse_with_profile_switches_to_sysmon_for_evtx_rows(self):
+        first_parse = pd.DataFrame(
+            [
+                {"raw_line": "Microsoft-Windows-Sysmon EventID=1", "event_template": "tmp1"},
+                {"raw_line": "Microsoft-Windows-Sysmon EventID=11", "event_template": "tmp2"},
+            ]
+        )
+        sysmon_parse = pd.DataFrame(
+            [
+                {
+                    "raw_line": "Microsoft-Windows-Sysmon EventID=1",
+                    "event_template": "Microsoft-Windows-Sysmon EventID=1",
+                }
+            ]
+        )
+
+        with patch(
+            "modules.parsing.parse_log_file",
+            side_effect=[(first_parse, ["general-template"]), (sysmon_parse, ["sysmon-template"])],
+        ) as mock_parse:
+            parsed_df, templates, profile = _parse_with_profile("sample.evtx", settings, max_lines=10)
+
+        self.assertEqual(profile["name"], "sysmon")
+        self.assertEqual(profile["template_strategy"], settings.sysmon_parser_template_strategy)
+        self.assertEqual(parsed_df.iloc[0]["event_template"], "Microsoft-Windows-Sysmon EventID=1")
+        self.assertEqual(templates, ["sysmon-template"])
+        self.assertEqual(mock_parse.call_count, 2)
+
+    def test_gate_observation_logging_records_retained_and_dropped_windows(self):
+        initial_anomalies = pd.DataFrame(
+            [
+                {
+                    "window_id": 1,
+                    "start_idx": 0,
+                    "end_idx": 20,
+                    "is_anomaly": True,
+                    "strict_is_anomaly": True,
+                    "anomaly_score": 0.91,
+                    "evaluation_status": "evaluated",
+                    "unknown_ratio": 0.1,
+                    "unknown_count": 2,
+                    "actual_event": "EventA",
+                    "predicted_event": "EventB",
+                    "expected_events": "EventB|EventC",
+                    "window_key_indicators": {"image": ["evil.exe"]},
+                },
+                {
+                    "window_id": 2,
+                    "start_idx": 1,
+                    "end_idx": 21,
+                    "is_anomaly": True,
+                    "strict_is_anomaly": False,
+                    "anomaly_score": 0.2,
+                    "evaluation_status": "evaluated",
+                    "unknown_ratio": 0.0,
+                    "unknown_count": 0,
+                    "actual_event": "EventC",
+                    "predicted_event": "EventC",
+                    "expected_events": "EventC|EventD",
+                    "window_key_indicators": {},
+                },
+            ]
+        )
+        filtered_anomalies = initial_anomalies.iloc[[0]].copy()
+        filtered_anomalies["llm_gate_policy"] = "keep_high_confidence_only"
+        filtered_anomalies["llm_reason"] = "Prioritaskan anomaly kuat"
+        filtered_anomalies["llm_gate_mode"] = "batch_sanity"
+        filtered_anomalies["llm_gate_priority"] = "high_confidence"
+        filtered_anomalies["llm_gate_priority_rank"] = 2
+        filtered_anomalies["llm_gate_active"] = True
+        filtered_anomalies["llm_gate_confidence"] = 0.77
+        filtered_anomalies["llm_gate_requested_context"] = ""
+        filtered_anomalies["llm_gate_prioritized_window_ids"] = "[1]"
+        investigation_state = {
+            "anomalies": filtered_anomalies.to_dict("records"),
+            "iocs_extracted": [{"type": "hash", "value": "abc"}],
+            "tool_results": [
+                {"ioc": "abc", "classification": "malicious", "tool": "test"}
+            ],
+            "attack_timeline": [],
+            "recommendations": ["Block IOC"],
+            "investigation_summary": "Suspicious activity found in retained anomaly window.",
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "gate_observations.jsonl"
+            count = append_gate_observations(
+                output_path,
+                session_id="session_test",
+                file_name="sample.evtx",
+                model_profile="general",
+                initial_anomalies_df=initial_anomalies,
+                filtered_anomalies_df=filtered_anomalies,
+                investigation_state=investigation_state,
+                llm_provider="ollama",
+                llm_model="slm-gate",
+            )
+
+            records = [json.loads(line) for line in output_path.read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual(count, 2)
+        self.assertEqual(len(records), 2)
+        self.assertTrue(records[0]["current_llm_gate"]["retained_for_investigation"])
+        self.assertEqual(
+            records[0]["current_llm_gate"]["decision"],
+            "escalate_to_investigation",
+        )
+        self.assertEqual(records[0]["current_llm_gate"]["priority"], "high_confidence")
+        self.assertEqual(records[0]["current_llm_gate"]["priority_rank"], 2)
+        self.assertTrue(records[0]["current_llm_gate"]["active"])
+        self.assertEqual(records[0]["current_llm_gate"]["confidence"], 0.77)
+        self.assertEqual(records[0]["current_llm_gate"]["prioritized_window_ids"], [1])
+        self.assertFalse(records[1]["current_llm_gate"]["retained_for_investigation"])
+        self.assertEqual(records[1]["current_llm_gate"]["decision"], "drop_or_archive")
+        self.assertEqual(records[1]["current_llm_gate"]["priority"], "not_retained")
+        self.assertEqual(records[0]["indicator_counts"], {"image": 1})
+        self.assertEqual(records[0]["investigation_result"]["malicious_hit_count"], 1)
+        self.assertEqual(records[0]["investigation_result"]["utility_label_hint"], "high_value")
+
+    def test_downstream_metrics_low_value_when_investigation_has_no_signal(self):
+        metrics = summarize_downstream_metrics(
+            {
+                "anomalies": [],
+                "iocs_extracted": [],
+                "tool_results": [],
+                "attack_timeline": [],
+                "recommendations": [],
+                "investigation_summary": "short",
+            }
+        )
+
+        self.assertEqual(metrics["utility_label_hint"], "low_value")
+        self.assertEqual(metrics["ioc_count"], 0)
+        self.assertEqual(metrics["malicious_hit_count"], 0)
+
+    def test_deeplog_detector_initializes_without_external_workspace_resolution(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            vocab_path = tmp_path / "DeepLog.pkl"
+            model_path = tmp_path / "DeepLog.pt"
+            embeddings_path = tmp_path / "embeddings.json"
+            embeddings_path.write_text(
+                json.dumps({"EventA": [1, 0, 0, 0], "EventB": [0, 1, 0, 0]}),
+                encoding="utf-8",
+            )
+
+            vocab = Vocab(
+                [["EventA", "EventB"]],
+                emb_file=str(embeddings_path),
+                embedding_dim=4,
+            )
+            vocab.semantic_vectors = {
+                "padding": [-1, -1, -1, -1],
+                "EventA": [1, 0, 0, 0],
+                "EventB": [0, 1, 0, 0],
+            }
+            with open(vocab_path, "wb") as handle:
+                pickle.dump(vocab, handle)
+
+            model = DeepLog(vocab_size=len(vocab), embedding_dim=4, hidden_size=8, num_layers=1, dropout=0.1)
+            torch.save(model.state_dict(), model_path)
+
+            with patch(
+                "modules.workspace.resolve_training_workspace",
+                side_effect=AssertionError("external workspace resolution should not happen"),
+            ):
+                detector = DeepLogDetector(
+                    str(model_path),
+                    str(vocab_path),
+                    window_size=2,
+                    step_size=1,
+                    topk=1,
+                )
+
+            self.assertEqual(type(detector.model).__name__, "DeepLog")
+            self.assertEqual(len(detector.vocab), len(vocab))
+
+    def test_vendored_logadempirical_vocab_pickle_roundtrip(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            vocab_path = Path(tmpdir) / "DeepLog.pkl"
+            embeddings_path = Path(tmpdir) / "embeddings.json"
+            embeddings_path.write_text(
+                json.dumps({"EventA": [1, 0, 0, 0], "EventB": [0, 1, 0, 0]}),
+                encoding="utf-8",
+            )
+            vocab = Vocab(
+                [["EventA", "EventB"]],
+                emb_file=str(embeddings_path),
+                embedding_dim=4,
+            )
+            vocab.semantic_vectors = {
+                "padding": [-1, -1, -1, -1],
+                "EventA": [1, 0, 0, 0],
+                "EventB": [0, 1, 0, 0],
+            }
+            vocab.save_vocab(vocab_path)
+
+            restored = Vocab.load_vocab(vocab_path)
+            self.assertEqual(restored.__class__.__module__, "logadempirical.data.vocab")
+            self.assertEqual(restored.get_event("EventA"), vocab.get_event("EventA"))
 
     def test_ioc_typing_rejects_filenames_and_keeps_valid_indicators(self):
         agent = DFIRAgent(llm=FakeLLM(""))
@@ -257,6 +563,88 @@ class BackendFixBatchTest(unittest.TestCase):
         self.assertIsNone(result["malware_family"])
         self.assertIsNone(result["confidence_level"])
         self.assertIsNone(result["threat_type"])
+
+    def test_threatfox_lookup_ignores_non_exact_subdomain_matches(self):
+        toolkit = ThreatIntelToolkit(api_keys={})
+
+        with patch(
+            "modules.threat_intel.requests.post",
+            return_value=FakeResponse(
+                {
+                    "query_status": "ok",
+                    "data": [
+                        {
+                            "ioc": "test-nonexistent-domain-12345.example.com",
+                            "ioc_type": "domain",
+                            "malware": "win.appleseed",
+                            "confidence_level": 75,
+                            "threat_type": "botnet_cc",
+                        }
+                    ],
+                }
+            ),
+        ):
+            with redirect_stdout(io.StringIO()):
+                result = toolkit.threatfox_lookup("example.com", "domain")
+
+        self.assertEqual(result["status"], "no_exact_match")
+        self.assertEqual(result["data"], [])
+        self.assertIsNone(result["malware_family"])
+        self.assertIsNone(result["confidence_level"])
+        self.assertIsNone(result["threat_type"])
+
+    def test_otx_lookup_maps_hash_ioc_to_file_endpoint_slug(self):
+        toolkit = ThreatIntelToolkit(api_keys={"alienvault_otx_api_key": "test-key"})
+        file_hash = "5de788d23b247b29f116cd0583280ce10a429e9f8c1d80c42deab20c6f4dbb4e"
+
+        with patch(
+            "modules.threat_intel.requests.get",
+            return_value=FakeResponse({"pulse_info": {"count": 0, "pulses": []}}),
+        ) as mock_get:
+            result = toolkit.alienvault_otx_lookup(file_hash, "sha256")
+
+        requested_url = mock_get.call_args.args[0]
+        self.assertIn(f"/api/v1/indicators/file/{file_hash}/general", requested_url)
+        self.assertEqual(result["ioc_type"], "file")
+
+    def test_otx_lookup_maps_and_encodes_url_endpoint_slug(self):
+        toolkit = ThreatIntelToolkit(api_keys={"alienvault_otx_api_key": "test-key"})
+        suspicious_url = "https://bad.example/payload.exe?a=1&b=two"
+
+        with patch(
+            "modules.threat_intel.requests.get",
+            return_value=FakeResponse({"pulse_info": {"count": 0, "pulses": []}}),
+        ) as mock_get:
+            result = toolkit.alienvault_otx_lookup(suspicious_url, "url")
+
+        requested_url = mock_get.call_args.args[0]
+        self.assertIn("/api/v1/indicators/url/https%3A%2F%2Fbad.example%2Fpayload.exe%3Fa%3D1%26b%3Dtwo/general", requested_url)
+        self.assertEqual(result["ioc_type"], "url")
+
+    def test_virustotal_lookup_uses_v3_ip_addresses_endpoint(self):
+        toolkit = ThreatIntelToolkit(api_keys={"virustotal_api_key": "test-key"})
+
+        with patch(
+            "modules.threat_intel.requests.get",
+            return_value=FakeResponse({"data": {"attributes": {"last_analysis_stats": {}}}}),
+        ) as mock_get:
+            result = toolkit.virustotal_lookup("8.8.8.8", "ip")
+
+        requested_url = mock_get.call_args.args[0]
+        self.assertIn("/api/v3/ip_addresses/8.8.8.8", requested_url)
+        self.assertEqual(result["tool"], "virustotal")
+
+    def test_threat_intel_cache_is_bounded(self):
+        toolkit = ThreatIntelToolkit(api_keys={})
+        toolkit.max_cache_entries = 2
+
+        toolkit._set_cache("tool", "ioc-1", {"ioc": "ioc-1"})
+        toolkit._set_cache("tool", "ioc-2", {"ioc": "ioc-2"})
+        toolkit._set_cache("tool", "ioc-3", {"ioc": "ioc-3"})
+
+        self.assertIsNone(toolkit._get_cached("tool", "ioc-1"))
+        self.assertEqual(toolkit._get_cached("tool", "ioc-2"), {"ioc": "ioc-2"})
+        self.assertEqual(toolkit._get_cached("tool", "ioc-3"), {"ioc": "ioc-3"})
 
     def test_report_uses_single_fallback_timestamp_for_missing_timeline_entries(self):
         generator = ReportGenerator()

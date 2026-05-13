@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 from langchain_community.llms import Ollama
@@ -17,6 +17,15 @@ from langchain_community.llms import Ollama
 
 class LLMAnomalyFilter:
     """Fast second-gate for DeepLog anomalies."""
+
+    GATE_MODE = "batch_sanity"
+    ALLOWED_POLICIES = {
+        "keep_all",
+        "keep_high_confidence_only",
+        "prioritize_critical",
+        "request_more_context",
+        "skip_low_signal_with_note",
+    }
 
     def __init__(
         self,
@@ -53,27 +62,29 @@ class LLMAnomalyFilter:
         print("Running one coarse LLM sanity gate for the batch...\n")
 
         summaries = self._build_batch_summaries(anomalies_df)
-        policy, reason = self._evaluate_batch(anomalies_df, summaries)
-        filtered_df = self._apply_gate_policy(anomalies_df, policy)
+        decision = self._evaluate_batch(anomalies_df, summaries)
+        policy = str(decision["policy"])
+        filtered_df = self._apply_gate_policy(
+            anomalies_df, policy, decision["priority_window_ids"]
+        )
 
         if filtered_df.empty:
-            print("⚠ Batch gate removed all anomalies, fail-open to original set")
+            print("[WARN] Batch gate removed all anomalies, fail-open to original set")
             filtered_df = anomalies_df.copy()
             policy = "keep_all"
-            reason = "Batch gate would drop all anomalies, fallback to original set"
+            decision["policy"] = policy
+            decision["reason"] = (
+                "Batch gate would drop all anomalies, fallback to original set"
+            )
 
-        filtered_df = filtered_df.copy()
-        filtered_df["llm_filtered"] = True
-        filtered_df["llm_reason"] = reason
-        filtered_df["llm_gate_mode"] = "batch_sanity"
-        filtered_df["llm_gate_policy"] = policy
+        filtered_df = self._annotate_gate_decision(filtered_df, decision)
 
         print(f"\n{'=' * 60}")
         print("LLM Batch Gate Results:")
         print(f"  Input: {len(anomalies_df)} anomalies")
         print(f"  Policy: {policy}")
         print(f"  Output: {len(filtered_df)} anomalies")
-        print(f"  Reason: {reason[:160]}")
+        print(f"  Reason: {str(decision['reason'])[:160]}")
         print(f"{'=' * 60}\n")
 
         return filtered_df
@@ -108,7 +119,7 @@ class LLMAnomalyFilter:
 
     def _evaluate_batch(
         self, anomalies_df: pd.DataFrame, summaries: List[Dict[str, Any]]
-    ) -> Tuple[str, str]:
+    ) -> Dict[str, Any]:
         prompt = self._build_batch_prompt(anomalies_df, summaries)
 
         try:
@@ -122,15 +133,34 @@ class LLMAnomalyFilter:
                 response = self._extract_json_object(response)
 
             result = json.loads(response)
-            policy = str(result.get("recommended_action", "keep_all")).strip()
-            if policy not in {"keep_all", "keep_high_confidence_only"}:
-                policy = "keep_all"
+            policy = self._normalize_policy(result.get("recommended_action"))
+            priority_window_ids = self._normalize_window_ids(
+                result.get("priority_window_ids")
+                or result.get("prioritized_window_ids")
+                or []
+            )
 
             reason = str(result.get("reason", "Batch sanity gate completed"))
-            return policy, reason
+            return {
+                "policy": policy,
+                "reason": reason,
+                "priority_window_ids": priority_window_ids,
+                "requested_context": self._normalize_requested_context(
+                    result.get("requested_context")
+                    or result.get("additional_context_needed")
+                    or ""
+                ),
+                "confidence": self._normalize_confidence(result.get("confidence")),
+            }
 
         except Exception as exc:
-            return "keep_all", f"Batch gate fallback: {exc}"
+            return {
+                "policy": "keep_all",
+                "reason": f"Batch gate fallback: {exc}",
+                "priority_window_ids": [],
+                "requested_context": "",
+                "confidence": 0.0,
+            }
 
     def _build_batch_prompt(
         self, anomalies_df: pd.DataFrame, summaries: List[Dict[str, Any]]
@@ -167,24 +197,142 @@ Top anomaly samples:
 {joined}
 
 Choose one policy only:
-- keep_all = the anomaly batch looks valid enough, do not spend more time filtering
-- keep_high_confidence_only = keep only the strongest anomalies locally
+- keep_all = retain all anomaly windows for investigation
+- keep_high_confidence_only = keep only strongest anomalies locally
+- prioritize_critical = keep the most critical window IDs you list in priority_window_ids
+- request_more_context = keep all windows but ask downstream agent/report to note missing context
+- skip_low_signal_with_note = drop low-signal windows locally, while recording why they were low signal
 
 Return JSON only:
 {{
-  "recommended_action": "keep_all" | "keep_high_confidence_only",
+  "recommended_action": "keep_all" | "keep_high_confidence_only" | "prioritize_critical" | "request_more_context" | "skip_low_signal_with_note",
+  "priority_window_ids": [1, 2],
+  "requested_context": "Brief missing-context note, or empty string",
+  "confidence": 0.0,
   "reason": "Brief Indonesian explanation, max 40 words"
 }}"""
 
     def _apply_gate_policy(
-        self, anomalies_df: pd.DataFrame, policy: str
+        self, anomalies_df: pd.DataFrame, policy: str, priority_window_ids: List[int]
     ) -> pd.DataFrame:
         if policy == "keep_high_confidence_only":
             mask = anomalies_df.apply(self._is_high_confidence, axis=1)
             filtered = anomalies_df[mask].copy()
             if not filtered.empty:
                 return filtered
+        if policy == "prioritize_critical":
+            priority_ids = set(priority_window_ids)
+            if priority_ids and "window_id" in anomalies_df.columns:
+                filtered = anomalies_df[
+                    anomalies_df["window_id"].apply(
+                        lambda value: self._safe_int(value) in priority_ids
+                    )
+                ].copy()
+                if not filtered.empty:
+                    return filtered
+            mask = anomalies_df.apply(self._is_high_confidence, axis=1)
+            filtered = anomalies_df[mask].copy()
+            if not filtered.empty:
+                return filtered
+        if policy == "skip_low_signal_with_note":
+            mask = anomalies_df.apply(self._is_high_confidence, axis=1)
+            filtered = anomalies_df[mask].copy()
+            if not filtered.empty:
+                return filtered
+        if policy == "request_more_context":
+            return anomalies_df.copy()
         return anomalies_df.copy()
+
+    def _annotate_gate_decision(
+        self, filtered_df: pd.DataFrame, decision: Dict[str, Any]
+    ) -> pd.DataFrame:
+        annotated_df = filtered_df.copy()
+        policy = str(decision["policy"])
+        priority_window_ids = decision["priority_window_ids"]
+        priority_set = set(priority_window_ids)
+
+        annotated_df["llm_filtered"] = True
+        annotated_df["llm_reason"] = str(decision["reason"])
+        annotated_df["llm_gate_mode"] = self.GATE_MODE
+        annotated_df["llm_gate_policy"] = policy
+        annotated_df["llm_gate_requested_context"] = str(
+            decision.get("requested_context") or ""
+        )
+        annotated_df["llm_gate_confidence"] = float(decision.get("confidence") or 0.0)
+        annotated_df["llm_gate_prioritized_window_ids"] = json.dumps(
+            priority_window_ids
+        )
+        annotated_df["llm_gate_active"] = True
+        annotated_df["llm_gate_priority"] = annotated_df.apply(
+            lambda row: self._gate_priority_label(row, policy, priority_set), axis=1
+        )
+        annotated_df["llm_gate_priority_rank"] = annotated_df.apply(
+            lambda row: self._gate_priority_rank(row, policy, priority_set), axis=1
+        )
+        return annotated_df
+
+    def _normalize_policy(self, value: Any) -> str:
+        policy = str(value or "keep_all").strip()
+        if policy not in self.ALLOWED_POLICIES:
+            return "keep_all"
+        return policy
+
+    def _normalize_window_ids(self, value: Any) -> List[int]:
+        if not isinstance(value, list):
+            return []
+        window_ids = []
+        seen = set()
+        for item in value:
+            window_id = self._safe_int(item)
+            if window_id <= 0 or window_id in seen:
+                continue
+            window_ids.append(window_id)
+            seen.add(window_id)
+        return window_ids
+
+    def _normalize_requested_context(self, value: Any) -> str:
+        if isinstance(value, list):
+            return "; ".join(str(item).strip() for item in value if str(item).strip())
+        return str(value or "").strip()
+
+    def _normalize_confidence(self, value: Any) -> float:
+        try:
+            confidence = float(value)
+        except (TypeError, ValueError):
+            return 0.0
+        return min(max(confidence, 0.0), 1.0)
+
+    def _safe_int(self, value: Any) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
+
+    def _gate_priority_label(
+        self, anomaly: pd.Series, policy: str, priority_window_ids: set[int]
+    ) -> str:
+        window_id = int(anomaly.get("window_id", 0) or 0)
+        if window_id in priority_window_ids:
+            return "critical_priority"
+        if policy == "request_more_context":
+            return "needs_more_context"
+        if self._is_high_confidence(anomaly):
+            return "high_confidence"
+        if policy == "skip_low_signal_with_note":
+            return "low_signal_retained"
+        return "standard"
+
+    def _gate_priority_rank(
+        self, anomaly: pd.Series, policy: str, priority_window_ids: set[int]
+    ) -> int:
+        label = self._gate_priority_label(anomaly, policy, priority_window_ids)
+        return {
+            "critical_priority": 1,
+            "high_confidence": 2,
+            "needs_more_context": 3,
+            "standard": 4,
+            "low_signal_retained": 5,
+        }.get(label, 9)
 
     def _is_high_confidence(self, anomaly: pd.Series) -> bool:
         score = float(anomaly.get("anomaly_score", 0.0) or 0.0)
