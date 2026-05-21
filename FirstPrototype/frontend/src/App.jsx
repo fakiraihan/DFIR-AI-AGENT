@@ -51,6 +51,9 @@ function App() {
   const [currentView, setCurrentView] = useState(storedWorkspaceState.currentView) // upload, investigation, settings
   const [sessionId, setSessionId] = useState(storedWorkspaceState.sessionId)
   const [sidebarOpen, setSidebarOpen] = useState(!isMobile)
+  const [appStarted, setAppStarted] = useState(() => storedWorkspaceState.currentView !== 'upload')
+
+  const showShell = appStarted || currentView !== 'upload'
 
   // Sync sidebar open state when mobile state changes
   React.useEffect(() => {
@@ -126,10 +129,12 @@ function App() {
         sidebarOpen={sidebarOpen}
         setSidebarOpen={setSidebarOpen}
         drawerWidth={drawerWidth}
+        currentView={currentView}
+        showShell={showShell}
       />
       
       <Sidebar 
-        isOpen={sidebarOpen}
+        isOpen={showShell && sidebarOpen}
         setIsOpen={setSidebarOpen}
         currentView={currentView}
         setCurrentView={handleSetCurrentView}
@@ -145,27 +150,30 @@ function App() {
         sx={{
           flexGrow: 1,
           p: 3,
-          width: { md: `calc(100% - ${drawerWidth}px)` },
+          width: { xs: '100%', md: `calc(100% - ${showShell && sidebarOpen ? drawerWidth : 0}px)` },
           minHeight: '100vh',
           display: 'flex',
           flexDirection: 'column',
-          transition: theme.transitions.create('margin', {
+          transition: theme.transitions.create(['width', 'margin'], {
             easing: theme.transitions.easing.sharp,
             duration: theme.transitions.duration.leavingScreen,
           }),
-          ...(sidebarOpen && !isMobile && {
-            transition: theme.transitions.create('margin', {
+          ...(showShell && sidebarOpen && !isMobile && {
+            transition: theme.transitions.create(['width', 'margin'], {
               easing: theme.transitions.easing.easeOut,
               duration: theme.transitions.duration.enteringScreen,
             }),
-            marginLeft: 0,
           }),
         }}
       >
-        <Toolbar /> {/* Spacer for AppBar */}
+        {showShell && <Toolbar />} {/* Spacer for AppBar */}
         
         {currentView === 'upload' && (
-          <UploadPage onUploadSuccess={handleUploadSuccess} />
+          <UploadPage 
+            onUploadSuccess={handleUploadSuccess} 
+            onStart={() => setAppStarted(true)} 
+            isLanding={!appStarted}
+          />
         )}
         
         {currentView === 'investigation' && sessionId && (

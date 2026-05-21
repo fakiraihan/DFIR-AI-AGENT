@@ -94,8 +94,16 @@ class ReportGenerator:
         report_id = report["metadata"]["report_id"]
 
         json_file = output_path / f"{report_id}.json"
+
+        def _default(obj):
+            if hasattr(obj, "item"):   # numpy scalars (int64, float32, etc.)
+                return obj.item()
+            if hasattr(obj, "tolist"):  # numpy arrays
+                return obj.tolist()
+            raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
         with open(json_file, "w", encoding="utf-8") as file_obj:
-            json.dump(report, file_obj, indent=2, ensure_ascii=False)
+            json.dump(report, file_obj, indent=2, ensure_ascii=False, default=_default)
 
         markdown_file = output_path / f"{report_id}.md"
         markdown_text = self._to_markdown(report)

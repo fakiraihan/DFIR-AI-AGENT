@@ -19,6 +19,8 @@ class LLMAnomalyFilter:
     """Fast second-gate for DeepLog anomalies."""
 
     GATE_MODE = "batch_sanity"
+    MAX_BATCH_SUMMARY_SAMPLES = 20
+    LOW_CONFIDENCE_THRESHOLD = 0.4
     ALLOWED_POLICIES = {
         "keep_all",
         "keep_high_confidence_only",
@@ -63,6 +65,16 @@ class LLMAnomalyFilter:
 
         summaries = self._build_batch_summaries(anomalies_df)
         decision = self._evaluate_batch(anomalies_df, summaries)
+        if (
+            str(decision.get("policy")) != "keep_all"
+            and float(decision.get("confidence") or 0.0) < self.LOW_CONFIDENCE_THRESHOLD
+        ):
+            decision["reason"] = (
+                f"Low-confidence gate decision ({decision.get('confidence')}); "
+                "fallback to keep_all"
+            )
+            decision["policy"] = "keep_all"
+            decision["priority_window_ids"] = []
         policy = str(decision["policy"])
         filtered_df = self._apply_gate_policy(
             anomalies_df, policy, decision["priority_window_ids"]
@@ -97,7 +109,7 @@ class LLMAnomalyFilter:
             ranked_df = ranked_df.sort_values(by="anomaly_score", ascending=False)
 
         summaries: List[Dict[str, Any]] = []
-        for _, anomaly in ranked_df.head(12).iterrows():
+        for _, anomaly in ranked_df.head(self.MAX_BATCH_SUMMARY_SAMPLES).iterrows():
             summaries.append(
                 {
                     "window_id": int(anomaly.get("window_id", 0) or 0),
@@ -124,43 +136,83 @@ class LLMAnomalyFilter:
 
         try:
             response = self.llm.invoke(prompt)
+            return self._parse_batch_decision(response)
+        except Exception as first_exc:
+            try:
+                retry_response = self.llm.invoke(self._build_retry_prompt(anomalies_df))
+                decision = self._parse_batch_decision(retry_response)
+                decision["reason"] = (
+                    f"Retry gate decision after parse failure: {decision['reason']}"
+                )
+                return decision
+            except Exception as exc:
+                return {
+                    "policy": "keep_all",
+                    "reason": f"Batch gate fallback: {first_exc}; retry failed: {exc}",
+                    "priority_window_ids": [],
+                    "requested_context": "",
+                    "confidence": 0.0,
+                    "confidence_provided": False,
+                }
 
-            if "```json" in response:
-                response = response.split("```json", 1)[1].split("```", 1)[0].strip()
-            elif "```" in response:
-                response = response.split("```", 1)[1].split("```", 1)[0].strip()
-            else:
-                response = self._extract_json_object(response)
+    def _parse_batch_decision(self, response: str) -> Dict[str, Any]:
+        if "```json" in response:
+            response = response.split("```json", 1)[1].split("```", 1)[0].strip()
+        elif "```" in response:
+            response = response.split("```", 1)[1].split("```", 1)[0].strip()
+        else:
+            response = self._extract_json_object(response)
 
-            result = json.loads(response)
-            policy = self._normalize_policy(result.get("recommended_action"))
-            priority_window_ids = self._normalize_window_ids(
-                result.get("priority_window_ids")
-                or result.get("prioritized_window_ids")
-                or []
-            )
+        result = json.loads(response)
+        policy = self._normalize_policy(result.get("recommended_action"))
+        priority_window_ids = self._normalize_window_ids(
+            result.get("priority_window_ids")
+            or result.get("prioritized_window_ids")
+            or []
+        )
 
-            reason = str(result.get("reason", "Batch sanity gate completed"))
-            return {
-                "policy": policy,
-                "reason": reason,
-                "priority_window_ids": priority_window_ids,
-                "requested_context": self._normalize_requested_context(
-                    result.get("requested_context")
-                    or result.get("additional_context_needed")
-                    or ""
-                ),
-                "confidence": self._normalize_confidence(result.get("confidence")),
-            }
+        reason = str(result.get("reason", "Batch sanity gate completed"))
+        return {
+            "policy": policy,
+            "reason": reason,
+            "priority_window_ids": priority_window_ids,
+            "requested_context": self._normalize_requested_context(
+                result.get("requested_context")
+                or result.get("additional_context_needed")
+                or ""
+            ),
+            "confidence": self._normalize_confidence(result.get("confidence")),
+            "confidence_provided": "confidence" in result,
+        }
 
-        except Exception as exc:
-            return {
-                "policy": "keep_all",
-                "reason": f"Batch gate fallback: {exc}",
-                "priority_window_ids": [],
-                "requested_context": "",
-                "confidence": 0.0,
-            }
+    def _build_retry_prompt(self, anomalies_df: pd.DataFrame) -> str:
+        return f"""Return JSON only for this DFIR anomaly batch.
+
+total_anomalies: {len(anomalies_df)}
+
+Allowed recommended_action values:
+- keep_all
+- keep_high_confidence_only
+- prioritize_critical
+- request_more_context
+- skip_low_signal_with_note
+
+Return exactly:
+{{"recommended_action":"keep_all","priority_window_ids":[],"confidence":0.5,"reason":"brief reason"}}"""
+
+    def _score_distribution(self, anomalies_df: pd.DataFrame) -> str:
+        if "anomaly_score" not in anomalies_df.columns or anomalies_df.empty:
+            return "unavailable"
+
+        scores = anomalies_df["anomaly_score"].fillna(0).astype(float)
+        high = int((scores >= 0.85).sum())
+        medium = int(((scores >= 0.5) & (scores < 0.85)).sum())
+        low = int((scores < 0.5).sum())
+        max_score = float(scores.max()) if not scores.empty else 0.0
+        return (
+            f"high>=0.85:{high}, medium=0.50-0.84:{medium}, "
+            f"low<0.50:{low}, max_score:{max_score:.4f}"
+        )
 
     def _build_batch_prompt(
         self, anomalies_df: pd.DataFrame, summaries: List[Dict[str, Any]]
@@ -188,10 +240,11 @@ class LLMAnomalyFilter:
 DeepLog has already detected anomaly windows. Your task is NOT to review each window in depth.
 Your task is only to decide the fastest safe batch policy for this anomaly set.
 
-Batch summary:
-- total_anomalies: {len(anomalies_df)}
-- strict_anomalies: {strict_count}
-- average_anomaly_score: {avg_score:.4f}
+        Batch summary:
+        - total_anomalies: {len(anomalies_df)}
+        - strict_anomalies: {strict_count}
+        - average_anomaly_score: {avg_score:.4f}
+        - score_distribution: {self._score_distribution(anomalies_df)}
 
 Top anomaly samples:
 {joined}
@@ -209,7 +262,7 @@ Return JSON only:
   "priority_window_ids": [1, 2],
   "requested_context": "Brief missing-context note, or empty string",
   "confidence": 0.0,
-  "reason": "Brief Indonesian explanation, max 40 words"
+  "reason": "Brief explanation, prefer English, max 40 words"
 }}"""
 
     def _apply_gate_policy(

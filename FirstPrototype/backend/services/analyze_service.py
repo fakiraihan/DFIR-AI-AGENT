@@ -14,35 +14,53 @@ from services.storage_service import (
 )
 
 
+ANOMALY_STATUS_KEYS = (
+    "unknown_template",
+    "unknown_template_ratio_exceeded",
+    "evtx_sparse_fallback",
+    "deeplog_topk_miss",
+)
+SKIPPED_EVALUATION_STATUSES = {
+    "unknown_template",
+    "unknown_template_ratio_exceeded",
+}
+
+
 def _validate_positive_int(value: int, field_name: str) -> None:
     if value <= 0:
         raise HTTPException(status_code=400, detail=f"{field_name} must be > 0")
 
 
-def _summarize_anomaly_results(all_results_df: Any) -> tuple[int, int, float]:
+def _count_evaluation_statuses(all_results_df: Any) -> dict[str, int]:
+    status_counts = {status: 0 for status in ANOMALY_STATUS_KEYS}
+    if all_results_df.empty or "evaluation_status" not in all_results_df.columns:
+        return status_counts
+
+    counts = all_results_df["evaluation_status"].value_counts().to_dict()
+    return {status: int(counts.get(status, 0)) for status in ANOMALY_STATUS_KEYS}
+
+
+def _summarize_anomaly_results(all_results_df: Any) -> tuple[int, int, float, dict[str, int]]:
     skipped_windows = 0
     strict_anomaly_count = 0
     avg_unknown_ratio = 0.0
+    evaluation_status_counts = _count_evaluation_statuses(all_results_df)
 
     if all_results_df.empty:
-        return skipped_windows, strict_anomaly_count, avg_unknown_ratio
+        return skipped_windows, strict_anomaly_count, avg_unknown_ratio, evaluation_status_counts
 
-    evaluated_df = all_results_df
     if "evaluation_status" in all_results_df.columns:
         skipped_windows = int(
-            (all_results_df["evaluation_status"] != "evaluated").sum()
+            all_results_df["evaluation_status"].isin(SKIPPED_EVALUATION_STATUSES).sum()
         )
-        evaluated_df = all_results_df[
-            all_results_df["evaluation_status"] == "evaluated"
-        ]
 
-    if "strict_is_anomaly" in evaluated_df.columns:
-        strict_anomaly_count = int(evaluated_df["strict_is_anomaly"].sum())
+    if "strict_is_anomaly" in all_results_df.columns:
+        strict_anomaly_count = int(all_results_df["strict_is_anomaly"].sum())
 
     if "unknown_ratio" in all_results_df.columns:
         avg_unknown_ratio = float(all_results_df["unknown_ratio"].mean())
 
-    return skipped_windows, strict_anomaly_count, avg_unknown_ratio
+    return skipped_windows, strict_anomaly_count, avg_unknown_ratio, evaluation_status_counts
 
 
 async def run_quick_analysis(
@@ -105,11 +123,17 @@ async def run_quick_analysis(
         topk=settings.deeplog_topk,
         skip_unknown_windows=settings.deeplog_skip_unknown_windows,
         max_unknown_ratio=settings.deeplog_max_unknown_ratio,
+        unknown_template_mode=settings.deeplog_unknown_template_mode,
+        evtx_sparse_fallback_enabled=settings.deeplog_evtx_sparse_fallback_enabled,
+        evtx_sparse_fallback_threshold=settings.deeplog_evtx_sparse_fallback_threshold,
     )
 
-    skipped_windows, strict_anomaly_count, avg_unknown_ratio = _summarize_anomaly_results(
-        all_results_df
-    )
+    (
+        skipped_windows,
+        strict_anomaly_count,
+        avg_unknown_ratio,
+        evaluation_status_counts,
+    ) = _summarize_anomaly_results(all_results_df)
 
     anomaly_records = anomalies_df.to_dict("records")
     truncated = len(anomaly_records) > anomaly_limit
@@ -140,6 +164,7 @@ async def run_quick_analysis(
             "strict_anomaly_count": strict_anomaly_count,
             "skipped_windows": skipped_windows,
             "avg_unknown_ratio": round(avg_unknown_ratio, 4),
+            "evaluation_status_counts": evaluation_status_counts,
         },
         "anomaly_results": anomaly_records,
     }

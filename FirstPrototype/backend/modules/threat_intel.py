@@ -3,12 +3,12 @@ Threat Intelligence Tool Wrappers
 Integrations for 6 threat intel APIs
 """
 import requests
-import aiohttp
 import json
 from collections import OrderedDict
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 import time
+import threading
 from urllib.parse import quote
 
 
@@ -25,6 +25,7 @@ class ThreatIntelToolkit:
         self.api_keys = api_keys
         self.max_cache_entries = 512
         self.session_cache = OrderedDict()  # Bounded cache results per session
+        self._cache_lock = threading.RLock()
     
     def _cache_key(self, tool_name: str, ioc: str) -> str:
         """Generate cache key"""
@@ -33,18 +34,51 @@ class ThreatIntelToolkit:
     def _get_cached(self, tool_name: str, ioc: str) -> Optional[Dict]:
         """Get cached result if available"""
         key = self._cache_key(tool_name, ioc)
-        cached = self.session_cache.get(key)
-        if cached is not None:
-            self.session_cache.move_to_end(key)
-        return cached
+        with self._cache_lock:
+            cached = self.session_cache.get(key)
+            if cached is not None:
+                self.session_cache.move_to_end(key)
+            return cached
     
     def _set_cache(self, tool_name: str, ioc: str, result: Dict):
         """Cache result"""
         key = self._cache_key(tool_name, ioc)
-        self.session_cache[key] = result
-        self.session_cache.move_to_end(key)
-        while len(self.session_cache) > self.max_cache_entries:
-            self.session_cache.popitem(last=False)
+        with self._cache_lock:
+            self.session_cache[key] = result
+            self.session_cache.move_to_end(key)
+            while len(self.session_cache) > self.max_cache_entries:
+                self.session_cache.popitem(last=False)
+
+    def _error_result(
+        self,
+        tool: str,
+        error: Exception | str,
+        *,
+        ioc: Optional[str] = None,
+        ioc_type: Optional[str] = None,
+        data: Any = None,
+        **extra: Any,
+    ) -> Dict[str, Any]:
+        """Build a consistent error payload with explicit HTTP details when available."""
+        result: Dict[str, Any] = {
+            "tool": tool,
+            "timestamp": datetime.now().isoformat(),
+            "status": "error",
+            "error": str(error),
+            "data": [] if data is None else data,
+        }
+        if ioc is not None:
+            result["ioc"] = ioc
+        if ioc_type is not None:
+            result["ioc_type"] = ioc_type
+
+        response = getattr(error, "response", None)
+        status_code = getattr(response, "status_code", None)
+        if status_code is not None:
+            result["http_status"] = status_code
+            result["http_error"] = f"HTTP {status_code}"
+        result.update(extra)
+        return result
     
     # ===== ThreatFox =====
     def threatfox_lookup(self, ioc: str, ioc_type: str = "ip") -> Dict[str, Any]:
@@ -59,13 +93,13 @@ class ThreatIntelToolkit:
         Returns:
             Threat intelligence data
         """
-        print(f"\n  → ThreatFox API Call")
+        print("\n  -> ThreatFox API Call")
         print(f"    IOC: {ioc} (type: {ioc_type})")
         
         # Check cache
         cached = self._get_cached("threatfox", ioc)
         if cached:
-            print(f"    ✓ Cache hit")
+            print("    Cache hit")
             return cached
         
         url = "https://threatfox-api.abuse.ch/api/v1/"
@@ -139,21 +173,11 @@ class ThreatIntelToolkit:
             return result
             
         except requests.exceptions.RequestException as e:
-            print(f"    ✗ Request failed: {e}")
-            return {
-                "tool": "threatfox",
-                "ioc": ioc,
-                "error": str(e),
-                "status": "error"
-            }
+            print(f"    Request failed: {e}")
+            return self._error_result("threatfox", e, ioc=ioc, ioc_type=ioc_type)
         except Exception as e:
-            print(f"    ✗ Exception: {e}")
-            return {
-                "tool": "threatfox",
-                "ioc": ioc,
-                "error": str(e),
-                "status": "error"
-            }
+            print(f"    Exception: {e}")
+            return self._error_result("threatfox", e, ioc=ioc, ioc_type=ioc_type)
 
     def _filter_exact_ioc_matches(self, items: List[Dict[str, Any]], requested_ioc: str) -> List[Dict[str, Any]]:
         """Keep ThreatFox rows that match the exact IOC requested."""
@@ -201,6 +225,8 @@ class ThreatIntelToolkit:
             
             result = {
                 "tool": "malwarebazaar",
+                "ioc": file_hash,
+                "ioc_type": "hash",
                 "hash": file_hash,
                 "timestamp": datetime.now().isoformat(),
                 "status": data.get("query_status"),
@@ -223,12 +249,7 @@ class ThreatIntelToolkit:
             return result
             
         except Exception as e:
-            return {
-                "tool": "malwarebazaar",
-                "hash": file_hash,
-                "error": str(e),
-                "status": "error"
-            }
+            return self._error_result("malwarebazaar", e, ioc=file_hash, hash=file_hash)
     
     # ===== URLHaus =====
     def urlhaus_lookup(self, url: str) -> Dict[str, Any]:
@@ -265,9 +286,12 @@ class ThreatIntelToolkit:
             
             result = {
                 "tool": "urlhaus",
+                "ioc": url,
+                "ioc_type": "url",
                 "url": url,
                 "timestamp": datetime.now().isoformat(),
                 "status": data.get("query_status"),
+                "data": data,
                 "url_status": data.get("url_status"),
                 "threat": data.get("threat"),
                 "tags": data.get("tags", []),
@@ -278,12 +302,7 @@ class ThreatIntelToolkit:
             return result
             
         except Exception as e:
-            return {
-                "tool": "urlhaus",
-                "url": url,
-                "error": str(e),
-                "status": "error"
-            }
+            return self._error_result("urlhaus", e, ioc=url, ioc_type="url", url=url)
     
     # ===== AlienVault OTX =====
     def alienvault_otx_lookup(self, ioc: str, ioc_type: str = "IPv4") -> Dict[str, Any]:
@@ -305,7 +324,12 @@ class ThreatIntelToolkit:
         
         api_key = self.api_keys.get("alienvault_otx_api_key")
         if not api_key:
-            return {"tool": "otx", "ioc": ioc, "error": "API key required (get free at otx.alienvault.com)", "status": "error"}
+            return self._error_result(
+                "alienvault_otx",
+                "API key required (get free at otx.alienvault.com)",
+                ioc=ioc,
+                ioc_type=ioc_type,
+            )
         
         otx_ioc_type = self._normalize_otx_ioc_type(ioc_type)
         encoded_ioc = quote(ioc, safe="")
@@ -322,6 +346,8 @@ class ThreatIntelToolkit:
                 "ioc": ioc,
                 "ioc_type": otx_ioc_type,
                 "timestamp": datetime.now().isoformat(),
+                "status": "ok",
+                "data": data,
                 "pulse_count": data.get("pulse_info", {}).get("count", 0),
                 "pulses": data.get("pulse_info", {}).get("pulses", [])[:3],  # Top 3 pulses
                 "reputation": data.get("reputation"),
@@ -332,12 +358,7 @@ class ThreatIntelToolkit:
             return result
             
         except Exception as e:
-            return {
-                "tool": "alienvault_otx",
-                "ioc": ioc,
-                "error": str(e),
-                "status": "error"
-            }
+            return self._error_result("alienvault_otx", e, ioc=ioc, ioc_type=otx_ioc_type)
 
     def _normalize_otx_ioc_type(self, ioc_type: str) -> str:
         """Map local IOC labels to AlienVault OTX indicator API types."""
@@ -399,8 +420,12 @@ class ThreatIntelToolkit:
             
             result = {
                 "tool": "greynoise",
+                "ioc": ip,
+                "ioc_type": "ip",
                 "ip": ip,
                 "timestamp": datetime.now().isoformat(),
+                "status": "ok",
+                "data": data,
                 "classification": data.get("classification"),
                 "noise": data.get("noise", False),
                 "riot": data.get("riot", False),
@@ -412,12 +437,7 @@ class ThreatIntelToolkit:
             return result
             
         except Exception as e:
-            return {
-                "tool": "greynoise",
-                "ip": ip,
-                "error": str(e),
-                "status": "error"
-            }
+            return self._error_result("greynoise", e, ioc=ip, ioc_type="ip", ip=ip)
     
     # ===== VirusTotal =====
     def virustotal_lookup(self, ioc: str, ioc_type: str = "ip") -> Dict[str, Any]:
@@ -438,7 +458,12 @@ class ThreatIntelToolkit:
         
         api_key = self.api_keys.get("virustotal_api_key")
         if not api_key:
-            return {"tool": "virustotal", "ioc": ioc, "error": "API key required (get free at virustotal.com)", "status": "error"}
+            return self._error_result(
+                "virustotal",
+                "API key required (get free at virustotal.com)",
+                ioc=ioc,
+                ioc_type=ioc_type,
+            )
         
         # Determine endpoint
         if ioc_type == "ip":
@@ -458,7 +483,23 @@ class ThreatIntelToolkit:
         headers = {"x-apikey": api_key}
         
         try:
-            response = requests.get(url, headers=headers, timeout=10)
+            response = None
+            for attempt in range(3):
+                response = requests.get(url, headers=headers, timeout=20)
+                if response.status_code != 429:
+                    break
+
+                wait_seconds = min(30 * (2 ** attempt), 60)
+                print(
+                    "    VirusTotal rate limited "
+                    f"(HTTP 429), retrying in {wait_seconds}s "
+                    f"(attempt {attempt + 1}/3)"
+                )
+                time.sleep(wait_seconds)
+
+            if response is None:
+                raise RuntimeError("VirusTotal request was not executed")
+
             response.raise_for_status()
             data = response.json()
             
@@ -470,6 +511,8 @@ class ThreatIntelToolkit:
                 "ioc": ioc,
                 "ioc_type": ioc_type,
                 "timestamp": datetime.now().isoformat(),
+                "status": "ok",
+                "data": data.get("data", {}),
                 "malicious": last_analysis_stats.get("malicious", 0),
                 "suspicious": last_analysis_stats.get("suspicious", 0),
                 "harmless": last_analysis_stats.get("harmless", 0),
@@ -482,12 +525,7 @@ class ThreatIntelToolkit:
             return result
             
         except Exception as e:
-            return {
-                "tool": "virustotal",
-                "ioc": ioc,
-                "error": str(e),
-                "status": "error"
-            }
+            return self._error_result("virustotal", e, ioc=ioc, ioc_type=ioc_type)
     
     def get_all_tools(self) -> List[str]:
         """Get list of available tools"""

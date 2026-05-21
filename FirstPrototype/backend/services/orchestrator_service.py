@@ -8,6 +8,14 @@ from services.llm_service import build_role_client, get_ready_provider_snapshot
 from services.parsing_service import parse_with_profile, resolve_config_path
 
 
+ANOMALY_STATUS_KEYS = (
+    "unknown_template",
+    "unknown_template_ratio_exceeded",
+    "evtx_sparse_fallback",
+    "deeplog_topk_miss",
+)
+
+
 def update_session_status(session_id: str, stage: str, message: str, progress: int):
     """Update session status with detailed progress."""
     session = session_store.get_session(session_id, touch=False)
@@ -114,8 +122,19 @@ def run_investigation_pipeline(session_id: str):
             topk=settings.deeplog_topk,
             skip_unknown_windows=settings.deeplog_skip_unknown_windows,
             max_unknown_ratio=settings.deeplog_max_unknown_ratio,
+            unknown_template_mode=settings.deeplog_unknown_template_mode,
+            evtx_sparse_fallback_enabled=settings.deeplog_evtx_sparse_fallback_enabled,
+            evtx_sparse_fallback_threshold=settings.deeplog_evtx_sparse_fallback_threshold,
         )
-        session_store.update_session(session_id, {"anomalies_count": len(anomalies_df)})
+        session_store.update_session(
+            session_id,
+            {
+                "anomalies_count": len(anomalies_df),
+                "deeplog_evaluation_status_counts": _count_evaluation_statuses(
+                    results_df
+                ),
+            },
+        )
         print(f"✓ DeepLog complete: {len(anomalies_df)} anomalies detected")
         update_session_status(
             session_id,
@@ -311,3 +330,12 @@ def _count_dataframe_matches(df, column: str, values: set[str]) -> int:
     if df.empty or column not in df.columns:
         return 0
     return sum(1 for value in df[column].tolist() if str(value) in values)
+
+
+def _count_evaluation_statuses(df) -> dict[str, int]:
+    status_counts = {status: 0 for status in ANOMALY_STATUS_KEYS}
+    if df.empty or "evaluation_status" not in df.columns:
+        return status_counts
+
+    counts = df["evaluation_status"].value_counts().to_dict()
+    return {status: int(counts.get(status, 0)) for status in ANOMALY_STATUS_KEYS}

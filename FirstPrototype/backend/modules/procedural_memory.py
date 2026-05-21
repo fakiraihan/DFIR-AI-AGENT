@@ -341,9 +341,9 @@ class ProceduralMemory:
                     "confidence_multiplier": 1.5
                 },
                 "domain": {
-                    "primary": "urlhaus",
-                    "reason": "Specialized in malware distribution URLs",
-                    "fallback": ["alienvault_otx", "threatfox"],
+                    "primary": "threatfox",
+                    "reason": "ThreatFox covers domains and malware family associations",
+                    "fallback": ["alienvault_otx", "virustotal"],
                     "parallel_allowed": False,
                     "stop_on_first_hit": False,
                     "confidence_multiplier": 1.1

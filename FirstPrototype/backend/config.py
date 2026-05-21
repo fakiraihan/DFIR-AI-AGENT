@@ -72,6 +72,9 @@ class Settings(BaseSettings):
     deeplog_num_layers: int = 2
     deeplog_skip_unknown_windows: bool = True
     deeplog_max_unknown_ratio: float = 0.4
+    deeplog_unknown_template_mode: str = "ignore"
+    deeplog_evtx_sparse_fallback_enabled: bool = True
+    deeplog_evtx_sparse_fallback_threshold: float = 0.75
     sysmon_deeplog_window_size: int = 10
 
 

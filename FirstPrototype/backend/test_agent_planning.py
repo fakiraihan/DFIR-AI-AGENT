@@ -46,6 +46,18 @@ class UnsupportedMemory(FakeProceduralMemory):
 
 
 class DFIRAgentPlanningTest(unittest.TestCase):
+    def _core_calls(self, calls):
+        return [
+            {"ioc": call["ioc"], "ioc_type": call["ioc_type"], "tool": call["tool"]}
+            for call in calls
+        ]
+
+    def _assert_traceable_calls(self, calls):
+        for call in calls:
+            self.assertIn(call.get("selection_source"), {"llm", "fallback_heuristic"})
+            self.assertTrue(call.get("selection_reason"))
+            self.assertTrue(call.get("expected_evidence"))
+
     def _build_state(self, **overrides: Any) -> InvestigationState:
         state: dict[str, Any] = {
             "anomalies": [],
@@ -87,8 +99,9 @@ class DFIRAgentPlanningTest(unittest.TestCase):
         self.assertEqual(memory.strategy_requests, ["ip_address", "domain"])
         self.assertTrue(result["planning_completed"])
         self.assertEqual(result["current_stage"], "planning_complete")
+        self._assert_traceable_calls(result["planned_tool_calls"])
         self.assertEqual(
-            result["planned_tool_calls"],
+            self._core_calls(result["planned_tool_calls"]),
             [
                 {"ioc": "8.8.8.8", "ioc_type": "ip", "tool": "greynoise_lookup"},
                 {"ioc": "8.8.8.8", "ioc_type": "ip", "tool": "threatfox_lookup"},
@@ -123,7 +136,8 @@ class DFIRAgentPlanningTest(unittest.TestCase):
 
         self.assertEqual(memory.strategy_requests, [])
         self.assertEqual(result["current_stage"], "planner_guided_tool_selection_complete")
-        self.assertEqual(result["tool_calls"], [planned_call])
+        self._assert_traceable_calls(result["tool_calls"])
+        self.assertEqual(self._core_calls(result["tool_calls"]), [planned_call])
 
     def test_planner_falls_back_to_static_playbook_when_memory_has_no_supported_tools(self):
         memory = UnsupportedMemory()
@@ -136,8 +150,9 @@ class DFIRAgentPlanningTest(unittest.TestCase):
             result = agent.plan_goals(state)
 
         self.assertEqual(memory.strategy_requests, ["domain"])
+        self._assert_traceable_calls(result["planned_tool_calls"])
         self.assertEqual(
-            result["planned_tool_calls"],
+            self._core_calls(result["planned_tool_calls"]),
             [
                 {
                     "ioc": "evil.example",
@@ -177,8 +192,9 @@ class DFIRAgentPlanningTest(unittest.TestCase):
 
         remaining = agent._select_new_planned_tool_calls(state)
 
+        self._assert_traceable_calls(remaining)
         self.assertEqual(
-            remaining,
+            self._core_calls(remaining),
             [{"ioc": "8.8.8.8", "ioc_type": "ip", "tool": "threatfox_lookup"}],
         )
 

@@ -18,7 +18,7 @@ const MarkdownRenderer = ({ content }) => {
         
         // Headings
         '& h1, & h2, & h3, & h4, & h5, & h6': {
-          color: 'text.primary',
+          color: '#F8FAFC',
           fontWeight: 700,
           letterSpacing: '-0.02em',
           lineHeight: 1.3,
@@ -36,7 +36,7 @@ const MarkdownRenderer = ({ content }) => {
         '& p': {
           mt: 0,
           mb: 2,
-          color: 'text.secondary',
+          color: '#CBD5E1',
         },
         
         // Links
@@ -55,7 +55,7 @@ const MarkdownRenderer = ({ content }) => {
           mt: 0,
           mb: 2,
           pl: 3,
-          color: 'text.secondary',
+          color: '#CBD5E1',
         },
         '& li': {
           mb: 0.5,
@@ -78,16 +78,16 @@ const MarkdownRenderer = ({ content }) => {
           m: 0,
           mb: 3,
           px: 2.5,
-          py: 1,
+          py: 1.5,
           borderLeft: '4px solid',
           borderColor: 'primary.main',
-          bgcolor: 'rgba(16, 185, 129, 0.04)', // subtle tint using the primary green hue
-          borderRadius: '0 4px 4px 0',
-          color: 'text.primary',
+          bgcolor: 'rgba(6, 182, 212, 0.05)',
+          borderRadius: '0 8px 8px 0',
+          color: '#F8FAFC',
           fontStyle: 'italic',
           '& p': {
             mb: 0,
-            color: 'text.primary',
+            color: '#F8FAFC',
           }
         },
         
@@ -131,17 +131,21 @@ const MarkdownRenderer = ({ content }) => {
           mb: 3,
           borderCollapse: 'collapse',
           fontSize: '0.95rem',
+          display: 'block',
+          overflowX: 'auto',
+          whiteSpace: 'nowrap',
+          bgcolor: 'rgba(255,255,255,0.02)',
+          borderRadius: 8,
         },
         '& th, & td': {
-          border: '1px solid',
-          borderColor: 'divider',
-          p: 1.5,
+          border: '1px solid rgba(255,255,255,0.1)',
+          p: 2,
           textAlign: 'left',
         },
         '& th': {
-          bgcolor: 'rgba(255, 255, 255, 0.03)',
+          bgcolor: 'rgba(255,255,255,0.05)',
           fontWeight: 600,
-          color: 'text.primary',
+          color: '#F8FAFC',
         },
         
         // Horizontal Rule

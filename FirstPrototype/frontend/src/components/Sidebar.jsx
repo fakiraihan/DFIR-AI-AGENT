@@ -111,7 +111,20 @@ const Sidebar = ({ isOpen, setIsOpen, currentView, setCurrentView, sessionId, on
 
   const drawerContent = (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <Toolbar /> {/* Spacer for AppBar */}
+      <Toolbar sx={{ pt: 2, pb: 1, alignItems: 'flex-start', minHeight: 'auto !important' }}>
+         <Box sx={{ display: 'flex', flexDirection: 'column', width: '100%' }}>
+            <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 0.5 }}>
+              <SearchIcon sx={{ color: 'primary.main', fontSize: 24 }} />
+              <Typography variant="h6" sx={{ fontWeight: 700, color: '#F8FAFC', letterSpacing: '-0.02em', lineHeight: 1.1 }}>
+                DFIR <Box component="span" sx={{ color: 'primary.main' }}>Agent</Box>
+              </Typography>
+            </Stack>
+            <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 500, letterSpacing: '0.02em' }}>
+              Cyber Incident Investigation
+            </Typography>
+         </Box>
+      </Toolbar>
+      <Divider sx={{ mt: 1, opacity: 0.5 }} />
       <Box sx={{ p: 2.5, flexGrow: 1 }}>
         <Box sx={{ px: 1.5, mb: 1.5 }}>
           <Typography variant="overline" color="text.secondary">
@@ -146,7 +159,7 @@ const Sidebar = ({ isOpen, setIsOpen, currentView, setCurrentView, sessionId, on
 
         {sessionId && (
           <>
-            <Divider sx={{ my: 2 }} />
+            <Divider sx={{ my: 2, opacity: 0.5 }} />
             <Box sx={{ px: 1.5 }}>
               <Typography variant="overline" color="text.secondary">
                 Active session
@@ -154,22 +167,23 @@ const Sidebar = ({ isOpen, setIsOpen, currentView, setCurrentView, sessionId, on
               <Box
                 sx={{
                   mt: 1,
-                  p: 1.75,
-                  borderRadius: 2.5,
-                  bgcolor: 'rgba(255,255,255,0.02)',
+                  p: 2,
+                  borderRadius: 3,
+                  bgcolor: 'rgba(6, 182, 212, 0.04)',
                   border: '1px solid',
-                  borderColor: 'divider',
+                  borderColor: 'rgba(6, 182, 212, 0.2)',
+                  boxShadow: 'inset 0 0 20px rgba(6, 182, 212, 0.02)',
                 }}
               >
-                <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1.25 }}>
+                <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1.5 }}>
                   <FolderOpenOutlinedIcon sx={{ fontSize: 18, color: 'primary.main' }} />
-                  <Typography variant="subtitle2">Current investigation</Typography>
+                  <Typography variant="subtitle2" sx={{ color: 'primary.light' }}>Current investigation</Typography>
                 </Stack>
-                <Chip label="In progress" size="small" variant="outlined" sx={{ mb: 1.5 }} />
+                <Chip label="In progress" size="small" sx={{ mb: 1.5, bgcolor: 'rgba(6, 182, 212, 0.1)', color: 'primary.light', border: '1px solid rgba(6, 182, 212, 0.3)' }} />
                 <Typography variant="caption" color="text.secondary" display="block">
                   Session ID
                 </Typography>
-                <Typography variant="body2" sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }} title={sessionId}>
+                <Typography variant="body2" sx={{ fontFamily: 'monospace', wordBreak: 'break-all', color: '#F8FAFC' }} title={sessionId}>
                   {sessionDisplay}
                 </Typography>
               </Box>
@@ -229,7 +243,7 @@ const Sidebar = ({ isOpen, setIsOpen, currentView, setCurrentView, sessionId, on
                       borderRadius: 2,
                       border: '1px solid',
                       borderColor: selected ? 'primary.main' : 'divider',
-                      bgcolor: selected ? 'rgba(16, 185, 129, 0.08)' : 'rgba(255,255,255,0.015)',
+                      bgcolor: selected ? 'rgba(6, 182, 212, 0.08)' : 'transparent',
                     }}
                   >
                     <ListItemText
@@ -319,7 +333,14 @@ const Sidebar = ({ isOpen, setIsOpen, currentView, setCurrentView, sessionId, on
   )
 
   return (
-    <Box component="nav" sx={{ width: { md: drawerWidth }, flexShrink: { md: 0 } }}>
+    <Box 
+      component="nav" 
+      sx={{ 
+        width: { md: isOpen ? drawerWidth : 0 }, 
+        flexShrink: { md: 0 },
+        transition: 'width 225ms cubic-bezier(0.4, 0, 0.6, 1) 0ms'
+      }}
+    >
       {isMobile ? (
         <Drawer
           variant="temporary"

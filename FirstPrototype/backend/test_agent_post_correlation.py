@@ -21,6 +21,12 @@ class ExplodingMemory:
 
 
 class DFIRAgentPostCorrelationTest(unittest.TestCase):
+    def _core_calls(self, calls):
+        return [
+            {"ioc": call["ioc"], "ioc_type": call["ioc_type"], "tool": call["tool"]}
+            for call in calls
+        ]
+
     def _build_state(self, **overrides: Any) -> InvestigationState:
         state: dict[str, Any] = {
             "anomalies": [],
@@ -98,7 +104,8 @@ class DFIRAgentPostCorrelationTest(unittest.TestCase):
             result = agent.select_tools(state)
 
         self.assertEqual(result["current_stage"], "reflection_guided_tool_selection_complete")
-        self.assertEqual(result["tool_calls"], [reflection_call])
+        self.assertEqual(self._core_calls(result["tool_calls"]), [reflection_call])
+        self.assertTrue(result["tool_calls"][0].get("expected_evidence"))
 
     def test_post_correlation_stops_when_reflection_limit_reached(self):
         agent = DFIRAgent(llm=FailingLLM())

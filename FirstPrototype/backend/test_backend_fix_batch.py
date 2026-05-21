@@ -3,6 +3,7 @@ import json
 import pickle
 import shutil
 import tempfile
+import threading
 import unittest
 from contextlib import redirect_stdout
 from datetime import datetime
@@ -532,6 +533,111 @@ class BackendFixBatchTest(unittest.TestCase):
         self.assertIn("failed validation", execution["tool_results"][0]["reason"])
         self.assertIn("does not support IOC type", execution["tool_results"][1]["reason"])
 
+    def test_execute_tools_runs_independent_api_calls_in_parallel(self):
+        agent = DFIRAgent(llm=FakeLLM(""))
+        barrier = threading.Barrier(2)
+
+        def fake_greynoise_lookup(ioc):
+            barrier.wait(timeout=2)
+            return {"tool": "greynoise", "ip": ioc, "status": "ok", "data": {"noise": False}}
+
+        def fake_threatfox_lookup(ioc, ioc_type):
+            barrier.wait(timeout=2)
+            return {"tool": "threatfox", "ioc": ioc, "ioc_type": ioc_type, "status": "ok", "data": []}
+
+        agent.threat_intel.greynoise_lookup = fake_greynoise_lookup
+        agent.threat_intel.threatfox_lookup = fake_threatfox_lookup
+
+        with redirect_stdout(io.StringIO()):
+            execution = agent.execute_tools(
+                {
+                    "tool_calls": [
+                        {"tool": "greynoise_lookup", "ioc": "8.8.8.8", "ioc_type": "ip"},
+                        {"tool": "threatfox_lookup", "ioc": "8.8.8.8", "ioc_type": "ip"},
+                    ]
+                }
+            )
+
+        self.assertEqual(len(execution["tool_results"]), 2)
+        self.assertFalse(any(result.get("error") for result in execution["tool_results"]))
+        self.assertEqual(
+            [result["tool_call"] for result in execution["tool_results"]],
+            ["greynoise_lookup", "threatfox_lookup"],
+        )
+
+    def test_execute_tools_preserves_original_ioc_type_for_dedupe_keys(self):
+        agent = DFIRAgent(llm=FakeLLM(""))
+        file_hash = "5de788d23b247b29f116cd0583280ce10a429e9f8c1d80c42deab20c6f4dbb4e"
+
+        agent.threat_intel.alienvault_otx_lookup = lambda ioc, ioc_type: {
+            "tool": "alienvault_otx",
+            "ioc": ioc,
+            "ioc_type": "IPv4",
+            "provider_ioc_type": ioc_type,
+            "status": "ok",
+            "data": {"pulse_info": {"count": 0}},
+        }
+        agent.threat_intel.virustotal_lookup = lambda ioc, ioc_type: {
+            "tool": "virustotal",
+            "ioc": ioc,
+            "ioc_type": "file",
+            "provider_ioc_type": ioc_type,
+            "status": "ok",
+            "data": {"attributes": {"last_analysis_stats": {}}},
+            "malicious": 0,
+            "suspicious": 0,
+        }
+
+        tool_calls = [
+            {"tool": "alienvault_otx_lookup", "ioc": "8.8.8.8", "ioc_type": "ip"},
+            {"tool": "virustotal_lookup", "ioc": file_hash, "ioc_type": "sha256"},
+        ]
+
+        with redirect_stdout(io.StringIO()):
+            execution = agent.execute_tools({"tool_calls": tool_calls})
+
+        results = execution["tool_results"]
+        self.assertEqual(results[0]["ioc_type"], "ip")
+        self.assertEqual(results[0]["provider_ioc_type"], "IPv4")
+        self.assertEqual(results[1]["ioc_type"], "sha256")
+        self.assertEqual(results[1]["provider_ioc_type"], "file")
+        self.assertEqual(
+            agent._attempted_tool_call_keys({"tool_results": results}),
+            {
+                ("alienvault_otx_lookup", "ip", "8.8.8.8"),
+                ("virustotal_lookup", "sha256", file_hash),
+            },
+        )
+
+    def test_correlation_prompt_does_not_treat_benign_raw_data_as_suspicious(self):
+        agent = DFIRAgent(llm=FakeLLM(""))
+        prompt = agent._create_correlation_prompt(
+            anomalies=[{"window_id": 1, "actual_event": "network connection"}],
+            tool_results=[
+                {
+                    "tool": "greynoise_lookup",
+                    "ioc": "8.8.8.8",
+                    "ioc_type": "ip",
+                    "status": "ok",
+                    "classification": "benign",
+                    "data": {"noise": False, "riot": False},
+                },
+                {
+                    "tool": "virustotal_lookup",
+                    "ioc": "example.com",
+                    "ioc_type": "domain",
+                    "status": "ok",
+                    "malicious": 0,
+                    "suspicious": 0,
+                    "data": {"attributes": {"last_analysis_stats": {}}},
+                },
+            ],
+        )
+
+        self.assertIn("- **Suspicious IOCs:** 0", prompt)
+        self.assertIn("- **Clean/Unknown:** 2", prompt)
+        self.assertIn("Response available, no explicit threat signal", prompt)
+
     def test_threatfox_lookup_returns_safe_empty_result_for_no_result_payload(self):
         toolkit = ThreatIntelToolkit(api_keys={})
 
@@ -606,6 +712,7 @@ class BackendFixBatchTest(unittest.TestCase):
         requested_url = mock_get.call_args.args[0]
         self.assertIn(f"/api/v1/indicators/file/{file_hash}/general", requested_url)
         self.assertEqual(result["ioc_type"], "file")
+        self.assertIn("data", result)
 
     def test_otx_lookup_maps_and_encodes_url_endpoint_slug(self):
         toolkit = ThreatIntelToolkit(api_keys={"alienvault_otx_api_key": "test-key"})
@@ -620,6 +727,7 @@ class BackendFixBatchTest(unittest.TestCase):
         requested_url = mock_get.call_args.args[0]
         self.assertIn("/api/v1/indicators/url/https%3A%2F%2Fbad.example%2Fpayload.exe%3Fa%3D1%26b%3Dtwo/general", requested_url)
         self.assertEqual(result["ioc_type"], "url")
+        self.assertIn("data", result)
 
     def test_virustotal_lookup_uses_v3_ip_addresses_endpoint(self):
         toolkit = ThreatIntelToolkit(api_keys={"virustotal_api_key": "test-key"})
@@ -633,6 +741,85 @@ class BackendFixBatchTest(unittest.TestCase):
         requested_url = mock_get.call_args.args[0]
         self.assertIn("/api/v3/ip_addresses/8.8.8.8", requested_url)
         self.assertEqual(result["tool"], "virustotal")
+        self.assertIn("data", result)
+
+    def test_virustotal_lookup_retries_after_rate_limit(self):
+        toolkit = ThreatIntelToolkit(api_keys={"virustotal_api_key": "test-key"})
+
+        with patch(
+            "modules.threat_intel.requests.get",
+            side_effect=[
+                FakeResponse({"error": "rate limited"}, status_code=429),
+                FakeResponse(
+                    {
+                        "data": {
+                            "attributes": {
+                                "last_analysis_stats": {
+                                    "malicious": 0,
+                                    "suspicious": 0,
+                                }
+                            }
+                        }
+                    }
+                ),
+            ],
+        ) as mock_get, patch("modules.threat_intel.time.sleep") as mock_sleep:
+            result = toolkit.virustotal_lookup("8.8.8.8", "ip")
+
+        self.assertEqual(mock_get.call_count, 2)
+        mock_sleep.assert_called_once_with(30)
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["malicious"], 0)
+
+    def test_extract_recommendations_accepts_flexible_headers(self):
+        agent = DFIRAgent(llm=FakeLLM(""))
+        recommendations = agent._extract_recommendations(
+            "## LANGKAH PERBAIKAN\n"
+            "1. Isolasi host yang terkait IOC prioritas.\n"
+            "- Hunt IOC pada DNS dan proxy log.\n"
+            "## Section berikutnya\n"
+            "- jangan ambil ini"
+        )
+
+        self.assertEqual(
+            recommendations,
+            [
+                "Isolasi host yang terkait IOC prioritas.",
+                "Hunt IOC pada DNS dan proxy log.",
+            ],
+        )
+
+    def test_extract_severity_ignores_negated_critical_mentions(self):
+        agent = DFIRAgent(llm=FakeLLM(""))
+
+        self.assertEqual(
+            agent._extract_severity(
+                "Severity: MEDIUM\nTidak ada ancaman CRITICAL yang teridentifikasi."
+            ),
+            "MEDIUM",
+        )
+
+    def test_report_prompt_uses_longer_correlation_preview_after_evidence(self):
+        agent = DFIRAgent(llm=FakeLLM(""))
+        correlation = "A" * 1300 + " important tail"
+        state = {
+            "anomalies": [
+                {"window_id": 1, "actual_event": "Event 1", "anomaly_score": 0.9}
+            ],
+            "iocs_extracted": [],
+            "tool_results": [],
+            "reasoning_steps": [],
+            "attack_timeline": [],
+            "correlation_analysis": correlation,
+        }
+
+        prompt = agent._create_report_prompt(state)
+
+        self.assertIn("important tail", prompt)
+        self.assertLess(
+            prompt.index("### DeepLog Anomaly Evidence"),
+            prompt.index("### Correlation Analysis Summary"),
+        )
 
     def test_threat_intel_cache_is_bounded(self):
         toolkit = ThreatIntelToolkit(api_keys={})

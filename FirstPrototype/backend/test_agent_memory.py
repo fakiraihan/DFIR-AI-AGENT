@@ -1,4 +1,5 @@
 import io
+import tempfile
 import unittest
 from contextlib import redirect_stdout
 from typing import Any
@@ -6,6 +7,7 @@ from typing import Any
 import pandas as pd
 
 from modules.agent import DFIRAgent, InvestigationState
+from modules.procedural_memory import ProceduralMemory
 
 
 class FailingLLM:
@@ -60,6 +62,18 @@ class FakeProceduralMemory:
 
 
 class DFIRAgentProceduralMemoryTest(unittest.TestCase):
+    def _core_calls(self, calls):
+        return [
+            {"ioc": call["ioc"], "ioc_type": call["ioc_type"], "tool": call["tool"]}
+            for call in calls
+        ]
+
+    def _assert_traceable_calls(self, calls):
+        for call in calls:
+            self.assertIn(call.get("selection_source"), {"llm", "fallback_heuristic"})
+            self.assertTrue(call.get("selection_reason"))
+            self.assertTrue(call.get("expected_evidence"))
+
     def _build_state(self, **overrides: Any) -> InvestigationState:
         state: dict[str, Any] = {
             "anomalies": [],
@@ -95,8 +109,9 @@ class DFIRAgentProceduralMemoryTest(unittest.TestCase):
 
         self.assertEqual(memory.strategy_requests, ["ip_address", "domain"])
         self.assertEqual(result["current_stage"], "memory_guided_tool_selection_complete")
+        self._assert_traceable_calls(result["tool_calls"])
         self.assertEqual(
-            result["tool_calls"],
+            self._core_calls(result["tool_calls"]),
             [
                 {"ioc": "8.8.8.8", "ioc_type": "ip", "tool": "greynoise_lookup"},
                 {"ioc": "8.8.8.8", "ioc_type": "ip", "tool": "threatfox_lookup"},
@@ -137,8 +152,9 @@ class DFIRAgentProceduralMemoryTest(unittest.TestCase):
 
         self.assertEqual(memory.strategy_requests, ["domain"])
         self.assertEqual(llm.calls, 1)
+        self._assert_traceable_calls(result["tool_calls"])
         self.assertEqual(
-            result["tool_calls"],
+            self._core_calls(result["tool_calls"]),
             [
                 {
                     "ioc": "evil.example",
@@ -146,6 +162,19 @@ class DFIRAgentProceduralMemoryTest(unittest.TestCase):
                     "tool": "threatfox_lookup",
                 }
             ],
+        )
+
+    def test_default_domain_strategy_uses_agent_supported_tools(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            memory = ProceduralMemory(f"{temp_dir}/procedural_memory.json")
+
+        strategy = memory.get_api_strategy("domain")
+        candidate_tools = [strategy.get("primary")] + list(strategy.get("fallback", []))
+
+        self.assertEqual(strategy.get("primary"), "threatfox")
+        self.assertNotIn("urlhaus", candidate_tools)
+        self.assertTrue(
+            {"threatfox", "alienvault_otx", "virustotal"}.issuperset(candidate_tools)
         )
 
     def test_execute_tools_updates_procedural_memory_performance(self):

@@ -199,11 +199,11 @@ function SettingsPage() {
     <Box sx={{ maxWidth: 1120, mx: 'auto', width: '100%', py: 4 }}>
       <Stack direction={{ xs: 'column', lg: 'row' }} justifyContent="space-between" spacing={3} sx={{ mb: 4 }}>
         <Box sx={{ maxWidth: 760 }}>
-          <Typography variant="overline" color="primary.main">
-            Settings
+          <Typography variant="overline" color="primary.main" sx={{ fontWeight: 600, letterSpacing: '0.05em' }}>
+            Provider Configuration
           </Typography>
-          <Typography variant="h3" sx={{ mt: 0.75, mb: 1.25 }}>
-            LLM routing and provider configuration
+          <Typography variant="h3" sx={{ mt: 0.75, mb: 1.25, fontWeight: 700, color: '#F8FAFC' }}>
+            LLM Routing & Settings
           </Typography>
           <Typography variant="body1" color="text.secondary">
             Keep investigations local-first with Ollama, or select Gemini / OpenRouter when you explicitly want cloud inference. No cloud fallback happens automatically.
@@ -226,22 +226,23 @@ function SettingsPage() {
         </Alert>
       )}
 
-      <Paper elevation={0} sx={{ p: { xs: 2.5, md: 3 }, borderRadius: 3, mb: 4 }}>
-        <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} alignItems={{ xs: 'stretch', md: 'center' }} justifyContent="space-between">
+      <Paper elevation={0} sx={{ p: { xs: 2.5, md: 4 }, borderRadius: 4, mb: 4, bgcolor: 'rgba(15, 23, 42, 0.62)', backdropFilter: 'blur(14px)', border: '1px solid rgba(148, 163, 184, 0.16)' }}>
+        <Stack direction={{ xs: 'column', md: 'row' }} spacing={3} alignItems={{ xs: 'stretch', md: 'center' }} justifyContent="space-between">
           <Box>
-            <Typography variant="h6">Active provider</Typography>
+            <Typography variant="h6" sx={{ color: '#F8FAFC', fontWeight: 600 }}>Active provider</Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
               One provider and one model are selected for each investigation run.
             </Typography>
           </Box>
 
-          <FormControl sx={{ minWidth: 240 }}>
+          <FormControl sx={{ minWidth: 260 }}>
             <InputLabel id="llm-provider-select">Provider</InputLabel>
             <Select
               labelId="llm-provider-select"
               label="Provider"
               value={selectedProvider}
               onChange={(event) => setSelectedProvider(event.target.value)}
+              sx={{ bgcolor: 'rgba(255,255,255,0.03)', borderRadius: 2 }}
             >
               <MenuItem value="ollama">Ollama</MenuItem>
               <MenuItem value="gemini">Gemini</MenuItem>
@@ -251,15 +252,16 @@ function SettingsPage() {
         </Stack>
 
         {activeProviderStatus && (
-          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.25} sx={{ mt: 2.5 }}>
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ mt: 3, p: 2, bgcolor: 'rgba(255,255,255,0.02)', borderRadius: 2, border: '1px solid rgba(255,255,255,0.05)' }}>
             <Chip
               icon={activeProviderStatus.ok ? <CheckCircleOutlineRoundedIcon /> : <ErrorOutlineRoundedIcon />}
               label={activeProviderStatus.ok ? 'Ready for use' : 'Needs attention'}
               color={activeProviderStatus.ok ? 'success' : 'error'}
               variant="outlined"
+              sx={{ fontWeight: 600 }}
             />
-            <Chip label={`Model ${activeProviderStatus.model || '—'}`} variant="outlined" />
-            <Chip label={`Latency ${activeProviderStatus.latency_ms ?? '—'} ms`} variant="outlined" />
+            <Chip label={`Model: ${activeProviderStatus.model || '—'}`} variant="outlined" sx={{ bgcolor: 'rgba(255,255,255,0.03)' }} />
+            <Chip label={`Latency: ${activeProviderStatus.latency_ms ?? '—'} ms`} variant="outlined" sx={{ bgcolor: 'rgba(255,255,255,0.03)' }} />
           </Stack>
         )}
       </Paper>
@@ -272,22 +274,25 @@ function SettingsPage() {
 
           return (
             <Grid item xs={12} lg={4} key={providerName}>
-              <Paper elevation={0} sx={{ p: 2.5, borderRadius: 3, height: '100%' }}>
-                <Stack spacing={2}>
+              <Paper elevation={0} sx={{ p: 3.5, borderRadius: 4, height: '100%', bgcolor: 'rgba(15, 23, 42, 0.4)', backdropFilter: 'blur(10px)', border: '1px solid', borderColor: selectedProvider === providerName ? 'primary.main' : 'rgba(148, 163, 184, 0.16)' }}>
+                <Stack spacing={3}>
                   <Box>
                     <Stack direction="row" justifyContent="space-between" spacing={1.5} alignItems="center">
                       <Stack direction="row" spacing={1.5} alignItems="center">
-                        <ProviderLogo providerKey={providerName} />
-                        <Typography variant="h6">{providerCard.title}</Typography>
+                        <Box sx={{ p: 1, bgcolor: 'rgba(255,255,255,0.05)', borderRadius: 2 }}>
+                          <ProviderLogo providerKey={providerName} />
+                        </Box>
+                        <Typography variant="h6" sx={{ fontWeight: 600, color: '#F8FAFC' }}>{providerCard.title}</Typography>
                       </Stack>
                       <Chip
                         size="small"
                         label={status?.ok ? 'Healthy' : status?.configured === false ? 'Not configured' : 'Unavailable'}
                         color={status?.ok ? 'success' : status?.configured === false ? 'default' : 'error'}
                         variant="outlined"
+                        sx={{ fontWeight: 600, bgcolor: status?.ok ? 'rgba(16, 185, 129, 0.05)' : 'transparent' }}
                       />
                     </Stack>
-                    <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75 }}>
+                    <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5, minHeight: 40 }}>
                       {providerCard.helper}
                     </Typography>
                   </Box>
@@ -338,9 +343,9 @@ function SettingsPage() {
         })}
       </Grid>
 
-      <Paper elevation={0} sx={{ p: { xs: 2.5, md: 3 }, borderRadius: 3 }}>
-        <Typography variant="h6" gutterBottom>
-          Local-first policy
+      <Paper elevation={0} sx={{ p: { xs: 2.5, md: 4 }, borderRadius: 4, bgcolor: 'rgba(245, 158, 11, 0.03)', border: '1px solid rgba(245, 158, 11, 0.2)' }}>
+        <Typography variant="h6" gutterBottom sx={{ color: '#fbbf24', display: 'flex', alignItems: 'center', gap: 1 }}>
+          <ErrorOutlineRoundedIcon /> Local-first policy
         </Typography>
         <Typography variant="body2" color="text.secondary">
           <b>Proceed at your own risk.</b> Cloud-based AI services expose your sensitive data to external servers and potential breaches. For absolute privacy and security, always prioritize local LLMs, which ensure your information never leaves your personal device.

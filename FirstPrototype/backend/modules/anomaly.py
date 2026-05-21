@@ -32,6 +32,9 @@ class DeepLogDetector:
         device: str = "cpu",
         skip_unknown_windows: bool = True,
         max_unknown_ratio: float = 0.4,
+        unknown_template_mode: str | None = None,
+        evtx_sparse_fallback_enabled: bool = True,
+        evtx_sparse_fallback_threshold: float = 0.75,
     ):
         self.window_size = window_size
         self.step_size = step_size
@@ -39,6 +42,11 @@ class DeepLogDetector:
         self.device = device
         self.skip_unknown_windows = skip_unknown_windows
         self.max_unknown_ratio = max_unknown_ratio
+        self.unknown_template_mode = self._resolve_unknown_template_mode(
+            unknown_template_mode, skip_unknown_windows
+        )
+        self.evtx_sparse_fallback_enabled = evtx_sparse_fallback_enabled
+        self.evtx_sparse_fallback_threshold = evtx_sparse_fallback_threshold
 
         self.vocab = Vocab.load_vocab(vocab_path)
         self.unk_index = getattr(self.vocab, "unk_index", None)
@@ -64,7 +72,7 @@ class DeepLogDetector:
 
     def _infer_model_config(
         self, model_state: Dict[str, torch.Tensor], fallback_vocab_size: int
-    ) -> Dict[str, int]:
+    ) -> Dict[str, Any]:
         embedding_weight = model_state.get("embedding.weight")
         fc_weight = model_state.get("fc.weight")
         lstm_hh = model_state.get("lstm.weight_hh_l0")
@@ -94,30 +102,18 @@ class DeepLogDetector:
         }
 
     def detect_anomalies(self, df: pd.DataFrame) -> pd.DataFrame:
-        if df.empty or len(df) <= self.window_size:
-            return pd.DataFrame(
-                columns=[
-                    "window_id",
-                    "start_idx",
-                    "end_idx",
-                    "is_anomaly",
-                    "strict_is_anomaly",
-                    "anomaly_score",
-                    "evaluation_status",
-                    "unknown_ratio",
-                    "unknown_count",
-                    "lines",
-                    "predicted_event",
-                    "actual_event",
-                    "predicted_events",
-                    "expected_events",
-                    "window_templates",
-                ]
-            )
+        if df.empty:
+            return self._empty_results()
+
+        if len(df) <= self.window_size:
+            fallback_results = self._detect_sparse_evtx_fallback(df)
+            if not fallback_results.empty:
+                return fallback_results
+            return self._empty_results()
 
         templates = df["event_template"].astype(str).tolist()
         windows = self._build_windows(len(templates))
-        results: List[Dict] = []
+        results: List[Dict[str, Any]] = []
 
         for window_id, start_idx, next_idx in tqdm(windows, desc="Detecting anomalies"):
             window_templates = templates[start_idx:next_idx]
@@ -132,19 +128,40 @@ class DeepLogDetector:
                 window_indices, actual_idx
             )
 
-            strict_is_anomaly = actual_idx not in topk_indices
             unknown_count = self._count_unknown_tokens(window_indices, actual_idx)
             unknown_ratio = float(unknown_count / (len(window_indices) + 1))
+            unknown_reason = self._unknown_template_reason(actual_idx, unknown_ratio)
+            fallback_score, fallback_reasons = self._fallback_for_unknown_evtx_row(
+                df.iloc[next_idx], unknown_reason
+            )
 
             evaluation_status = "evaluated"
-            if self._should_skip_window(actual_idx, unknown_ratio):
-                evaluation_status = "skipped_unknown_template"
+            strict_is_anomaly = actual_idx not in topk_indices
+            if fallback_reasons and fallback_score >= getattr(
+                self, "evtx_sparse_fallback_threshold", 0.75
+            ):
+                evaluation_status = "evtx_sparse_fallback"
+                is_anomaly = True
+                strict_is_anomaly = False
+                anomaly_score = fallback_score
+            elif unknown_reason and self.unknown_template_mode == "ignore":
+                evaluation_status = unknown_reason
                 is_anomaly = False
                 strict_is_anomaly = False
                 anomaly_score = 0.0
+            elif unknown_reason and self.unknown_template_mode == "warn":
+                evaluation_status = unknown_reason
+                is_anomaly = strict_is_anomaly
+                anomaly_score = float(max(0.0, 1.0 - actual_prob))
+            elif unknown_reason and self.unknown_template_mode == "anomaly":
+                evaluation_status = unknown_reason
+                is_anomaly = True
+                anomaly_score = 1.0
             else:
                 is_anomaly = strict_is_anomaly
                 anomaly_score = float(max(0.0, 1.0 - actual_prob))
+                if is_anomaly:
+                    evaluation_status = "deeplog_topk_miss"
 
             predicted_events = [self._index_to_event(idx) for idx in topk_indices]
             line_payload = self._build_line_payload(df, start_idx, next_idx, is_anomaly)
@@ -173,10 +190,174 @@ class DeepLogDetector:
                     "topk_probabilities": topk_probs,
                     "anomalous_line": anomalous_line,
                     "window_key_indicators": window_key_indicators,
+                    "fallback_reasons": fallback_reasons,
                 }
             )
 
         return pd.DataFrame(results)
+
+    def _empty_results(self) -> pd.DataFrame:
+        return pd.DataFrame(
+            columns=[
+                "window_id",
+                "start_idx",
+                "end_idx",
+                "is_anomaly",
+                "strict_is_anomaly",
+                "anomaly_score",
+                "evaluation_status",
+                "unknown_ratio",
+                "unknown_count",
+                "lines",
+                "predicted_event",
+                "actual_event",
+                "predicted_events",
+                "expected_events",
+                "window_templates",
+            ]
+        )
+
+    def _detect_sparse_evtx_fallback(self, df: pd.DataFrame) -> pd.DataFrame:
+        if not getattr(self, "evtx_sparse_fallback_enabled", True):
+            return self._empty_results()
+
+        results: List[Dict[str, Any]] = []
+        for row_index in range(len(df)):
+            row = df.iloc[row_index]
+            if not self._is_evtx_like_row(row):
+                continue
+
+            score, reasons = self._score_sparse_evtx_row(row)
+            is_anomaly = score >= getattr(
+                self, "evtx_sparse_fallback_threshold", 0.75
+            )
+            line_payload = self._build_line_payload(df, row_index, row_index, is_anomaly)
+            anomalous_line = line_payload[-1] if line_payload else {}
+            window_key_indicators = self._collect_window_indicators(line_payload)
+            actual_event = str(
+                row.get("event_template")
+                or row.get("EventTemplate")
+                or row.get("raw_line")
+                or ""
+            )
+
+            results.append(
+                {
+                    "window_id": len(results),
+                    "start_idx": row_index,
+                    "end_idx": row_index,
+                    "is_anomaly": is_anomaly,
+                    "strict_is_anomaly": False,
+                    "anomaly_score": score,
+                    "evaluation_status": "evtx_sparse_fallback",
+                    "unknown_ratio": 1.0,
+                    "unknown_count": 1,
+                    "lines": line_payload,
+                    "predicted_event": "evtx_sparse_fallback",
+                    "actual_event": actual_event,
+                    "predicted_events": "",
+                    "expected_events": "",
+                    "window_templates": actual_event,
+                    "topk_probabilities": [],
+                    "anomalous_line": anomalous_line,
+                    "window_key_indicators": window_key_indicators,
+                    "fallback_reasons": reasons,
+                }
+            )
+
+        if not results:
+            return self._empty_results()
+        return pd.DataFrame(results)
+
+    def _is_evtx_like_row(self, row: pd.Series) -> bool:
+        event_id = row.get("EventId", row.get("event_id", ""))
+        provider = row.get("Component", row.get("Provider", row.get("provider", "")))
+        template = row.get("EventTemplate", row.get("event_template", ""))
+        raw_line = row.get("raw_line", row.get("Content", ""))
+
+        if event_id not in (None, ""):
+            return True
+        if provider and template:
+            return True
+        return bool(re.search(r"\bEventID=\d+\b", str(template or raw_line)))
+
+    def _score_sparse_evtx_row(self, row: pd.Series) -> Tuple[float, List[str]]:
+        parameter_map = self._safe_load_parameter_map(row)
+        if not parameter_map:
+            parameter_map = self._parameter_map(self._safe_load_parameters(row))
+
+        event_id = str(row.get("EventId", row.get("event_id", ""))).strip()
+        level = str(row.get("Level", row.get("level", ""))).lower()
+        text_parts = [
+            str(row.get("Component", "")),
+            str(row.get("Provider", "")),
+            str(row.get("EventTemplate", "")),
+            str(row.get("event_template", "")),
+            str(row.get("Content", "")),
+            str(row.get("ParameterList", "")),
+            str(row.get("raw_line", "")),
+            " ".join(str(value) for value in parameter_map.values()),
+        ]
+        text = " ".join(part for part in text_parts if part).lower()
+
+        score = 0.0
+        reasons: List[str] = []
+        suspicious_terms = {
+            "encodedcommand": 0.45,
+            " -enc ": 0.45,
+            "invoke-mimikatz": 0.5,
+            "mimikatz": 0.5,
+            "lsass": 0.35,
+            "sekurlsa": 0.5,
+            "rundll32": 0.3,
+            "regsvr32": 0.35,
+            "certutil": 0.35,
+            "wmic": 0.25,
+            "powershell": 0.3,
+            "downloadstring": 0.45,
+            "frombase64string": 0.45,
+            "schtasks": 0.25,
+            "\\temp\\": 0.2,
+        }
+        for term, weight in suspicious_terms.items():
+            if term in text:
+                score += weight
+                reasons.append(f"term:{term.strip()}")
+
+        if event_id in {"1", "3", "7", "8", "10", "11", "13", "22", "4698", "7045"}:
+            score += 0.2
+            reasons.append(f"event_id:{event_id}")
+
+        if level in {"critical", "error", "warning", "warn"}:
+            score += 0.1
+            reasons.append(f"level:{level}")
+
+        important_fields = self._collect_important_fields(parameter_map)
+        if important_fields.get("command_line") and any(
+            token in important_fields["command_line"].lower()
+            for token in ["-enc", "encodedcommand", "downloadstring", "frombase64string"]
+        ):
+            score += 0.25
+            reasons.append("field:command_line")
+
+        if important_fields.get("target_object") and "\\temp\\" in important_fields[
+            "target_object"
+        ].lower():
+            score += 0.1
+            reasons.append("field:target_object")
+
+        return min(score, 1.0), reasons
+
+    def _fallback_for_unknown_evtx_row(
+        self, row: pd.Series, unknown_reason: str
+    ) -> Tuple[float, List[str]]:
+        if not unknown_reason:
+            return 0.0, []
+        if not getattr(self, "evtx_sparse_fallback_enabled", True):
+            return 0.0, []
+        if not self._is_evtx_like_row(row):
+            return 0.0, []
+        return self._score_sparse_evtx_row(row)
 
     def _count_unknown_tokens(self, window_indices: List[int], actual_idx: int) -> int:
         if self.unk_index is None:
@@ -186,15 +367,27 @@ class DeepLogDetector:
             count += 1
         return count
 
-    def _should_skip_window(self, actual_idx: int, unknown_ratio: float) -> bool:
-        if not self.skip_unknown_windows:
-            return False
+    def _resolve_unknown_template_mode(
+        self, unknown_template_mode: str | None, skip_unknown_windows: bool
+    ) -> str:
+        if unknown_template_mode is None:
+            return "ignore" if skip_unknown_windows else "warn"
+        mode = str(unknown_template_mode).strip().lower()
+        if mode not in {"ignore", "warn", "anomaly"}:
+            raise ValueError(
+                "unknown_template_mode must be one of: ignore, warn, anomaly"
+            )
+        return mode
+
+    def _unknown_template_reason(self, actual_idx: int, unknown_ratio: float) -> str:
         if self.unk_index is None:
-            return False
+            return ""
         if actual_idx == self.unk_index:
-            return True
+            return "unknown_template"
         # Guardrail to avoid false flood when parser-template mismatch is high.
-        return unknown_ratio >= self.max_unknown_ratio
+        if unknown_ratio >= self.max_unknown_ratio:
+            return "unknown_template_ratio_exceeded"
+        return ""
 
     def get_anomalous_windows(self, results_df: pd.DataFrame) -> pd.DataFrame:
         return results_df[results_df["is_anomaly"] == True].copy()
@@ -236,8 +429,8 @@ class DeepLogDetector:
         start_idx: int,
         next_idx: int,
         is_anomaly: bool,
-    ) -> List[Dict]:
-        lines = []
+    ) -> List[Dict[str, Any]]:
+        lines: List[Dict[str, Any]] = []
         end_inclusive = min(next_idx, len(df) - 1)
         for row_index in range(start_idx, end_inclusive + 1):
             row = df.iloc[row_index]

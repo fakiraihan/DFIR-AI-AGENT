@@ -5,7 +5,8 @@ const PDFExportTemplate = lazy(() => import('./PDFExportTemplate'))
 import ThinkingIndicator from './ThinkingIndicator'
 import { 
   Box, Typography, Paper, Button, Alert, CircularProgress, 
-  Chip, Stack, Grid, LinearProgress, Divider, Menu, MenuItem, ListItemIcon
+  Chip, Stack, Grid, LinearProgress, Divider, Menu, MenuItem, ListItemIcon,
+  Stepper, Step, StepLabel, Tabs, Tab
 } from '@mui/material'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline'
@@ -21,12 +22,14 @@ import ArrowOutwardRoundedIcon from '@mui/icons-material/ArrowOutwardRounded'
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf'
 import DescriptionIcon from '@mui/icons-material/Description'
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown'
+import BugReportIcon from '@mui/icons-material/BugReport'
+import LightbulbIcon from '@mui/icons-material/Lightbulb'
+import ArticleIcon from '@mui/icons-material/Article'
 
 import { exportToDocx, exportToPdf } from '../utils/exportUtils'
 
 const formatDisplayDate = (value) => {
   const parsedDate = new Date(value)
-
   return Number.isNaN(parsedDate.getTime()) ? 'Unavailable' : parsedDate.toLocaleString()
 }
 
@@ -95,12 +98,27 @@ const getStatusChipColor = (statusValue) => {
 
 const getProgressValue = (value) => {
   const numericValue = Number(value)
-
-  if (!Number.isFinite(numericValue)) {
-    return 0
-  }
-
+  if (!Number.isFinite(numericValue)) return 0
   return Math.min(100, Math.max(0, numericValue))
+}
+
+const TabPanel = (props) => {
+  const { children, value, index, ...other } = props
+  return (
+    <div
+      role="tabpanel"
+      hidden={value !== index}
+      id={`report-tabpanel-${index}`}
+      aria-labelledby={`report-tab-${index}`}
+      {...other}
+    >
+      {value === index && (
+        <Box sx={{ pt: 3 }}>
+          {children}
+        </Box>
+      )}
+    </div>
+  )
 }
 
 const InvestigationPage = ({ sessionId, onBackToUpload, onSessionMissing }) => {
@@ -109,62 +127,55 @@ const InvestigationPage = ({ sessionId, onBackToUpload, onSessionMissing }) => {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [displayProgress, setDisplayProgress] = useState(0)
+  const currentProgressRef = useRef(0)
   const [exportAnchorEl, setExportAnchorEl] = useState(null)
   const [isExporting, setIsExporting] = useState(false)
+  const [activeTab, setActiveTab] = useState(0)
   const pdfExportRef = useRef(null)
   const exportMenuOpen = Boolean(exportAnchorEl)
 
-  // Define investigation stages
-  const stages = [
-    { id: 'parsing', name: 'Log parsing', icon: <AssessmentIcon fontSize="small" />, description: 'Normalizing log structure and extracting records.' },
-    { id: 'anomaly_detection', name: 'Anomaly detection', icon: <AnalyticsIcon fontSize="small" />, description: 'Reviewing deviation patterns across telemetry windows.' },
-    { id: 'ai_agent', name: 'Correlation review', icon: <TravelExploreRoundedIcon fontSize="small" />, description: 'Linking suspicious findings into a coherent incident story.' },
-    { id: 'report_generation', name: 'Report assembly', icon: <PolicyIcon fontSize="small" />, description: 'Preparing the final evidence summary.' },
-    { id: 'completed', name: 'Completed', icon: <CheckCircleIcon fontSize="small" />, description: 'Investigation finished and ready for review.' }
-  ]
+  // Mapping stages for pipeline stepper
+  const pipelineStages = [
+    { id: 'upload', label: 'Upload & Session', match: ['upload', 'session'] },
+    { id: 'parsing', label: 'Log Parsing', match: ['parse', 'parsing'] },
+    { id: 'anomaly_detection', label: 'DeepLog Detection', match: ['anomaly', 'deeplog'] },
+    { id: 'llm_filter', label: 'LLM Anomaly Gate', match: ['filter', 'gate'] },
+    { id: 'ai_agent', label: 'AI Agent Investigation', match: ['agent', 'investigat'] },
+    { id: 'threat_intel', label: 'Threat Intel Enrichment', match: ['intel', 'enrich'] },
+    { id: 'report_generation', label: 'Report Generation', match: ['report'] }
+  ];
 
-  const currentStage = stages.find(stage => stage.id === status?.stage)
-  const stageLabel = currentStage?.name || 'Investigation'
-  const stageDescription = status?.current_message || currentStage?.description || 'Processing investigation results.'
+  const mapBackendStageToStep = (backendStage) => {
+    if (!backendStage) return 0;
+    const lowerStage = backendStage.toLowerCase();
+    
+    // Check if it's explicitly completed
+    if (lowerStage === 'completed' || status?.status === 'completed') return pipelineStages.length;
+    
+    for (let i = pipelineStages.length - 1; i >= 0; i--) {
+      if (pipelineStages[i].match.some(m => lowerStage.includes(m))) {
+        return i;
+      }
+    }
+    return 1; // Default to parsing if unknown but processing
+  }
+
+  const activeStep = mapBackendStageToStep(status?.stage);
   const targetProgress = getProgressValue(status?.progress)
-
   const severity = report?.metadata?.severity || (status?.status === 'error' || status?.status === 'failed' ? 'HIGH' : status?.status === 'completed' ? 'MEDIUM' : 'LOW')
   const statusLabel = status?.status ? status.status.charAt(0).toUpperCase() + status.status.slice(1) : 'Pending'
+  
   const severityColor =
     severity === 'HIGH' ? 'error' :
     severity === 'MEDIUM' ? 'warning' :
     severity === 'LOW' ? 'info' : 'default'
 
-  const summaryCards = [
-    {
-      label: 'Progress',
-      value: `${Math.round(displayProgress)}%`,
-      tone: 'primary.main',
-      helper: stageLabel,
-      icon: <AnalyticsIcon fontSize="small" />,
-    },
-    {
-      label: 'Anomalies',
-      value: status?.summary?.anomalies ?? report?.ioc_analysis?.length ?? '—',
-      tone: 'error.main',
-      helper: status?.summary?.anomalies != null ? 'Model-detected anomalies' : report ? 'Indicators requiring review' : 'Awaiting report output',
-      icon: <WarningAmberRoundedIcon fontSize="small" />,
-    },
-    {
-      label: 'Severity',
-      value: severity,
-      tone: severity === 'HIGH' ? 'error.main' : severity === 'MEDIUM' ? 'warning.main' : 'info.main',
-      helper: statusLabel,
-      icon: <ShieldOutlinedIcon fontSize="small" />,
-    },
-    {
-      label: 'Evidence points',
-      value: report?.attack_timeline?.length ?? '—',
-      tone: 'text.primary',
-      helper: report ? 'Timeline events collected' : 'Pending evidence stream',
-      icon: <TimelineIcon fontSize="small" />,
-    },
-  ]
+  const metricCards = [
+    { label: 'Parsed Logs', value: status?.summary?.parsed_logs ?? 'N/A' },
+    { label: 'Templates', value: status?.summary?.templates ?? 'N/A' },
+    { label: 'Anomalies', value: status?.summary?.anomalies ?? status?.summary?.anomaly_count ?? 'N/A' },
+    { label: 'IOCs', value: report?.ioc_analysis?.length ?? 'N/A' }
+  ];
 
   useEffect(() => {
     let timeoutId = null
@@ -173,31 +184,25 @@ const InvestigationPage = ({ sessionId, onBackToUpload, onSessionMissing }) => {
     const fetchReport = async () => {
       try {
         const response = await axios.get(`/api/report/${sessionId}`)
-
         if (isActive) {
           setReport(response.data)
         }
       } catch (err) {
-        if (isActive) {
-          console.error('Failed to fetch report:', err)
-        }
+        if (isActive) console.error('Failed to fetch report:', err)
       }
     }
 
     const checkStatus = async () => {
       try {
         const response = await axios.get(`/api/status/${sessionId}`)
-
-        if (!isActive) {
-          return
-        }
+        if (!isActive) return
 
         setStatus(response.data)
 
         if (response.data.status === 'completed') {
           await fetchReport()
         } else if (response.data.status === 'processing') {
-          timeoutId = setTimeout(checkStatus, 1000)
+          timeoutId = setTimeout(checkStatus, 1500)
         }
       } catch (err) {
         if (isActive) {
@@ -205,13 +210,10 @@ const InvestigationPage = ({ sessionId, onBackToUpload, onSessionMissing }) => {
             onSessionMissing()
             return
           }
-
           setError(err.response?.data?.detail || 'Failed to fetch status')
         }
       } finally {
-        if (isActive) {
-          setLoading(false)
-        }
+        if (isActive) setLoading(false)
       }
     }
 
@@ -223,61 +225,54 @@ const InvestigationPage = ({ sessionId, onBackToUpload, onSessionMissing }) => {
 
     return () => {
       isActive = false
-
-      if (timeoutId) {
-        clearTimeout(timeoutId)
-      }
+      if (timeoutId) clearTimeout(timeoutId)
     }
   }, [sessionId, onSessionMissing])
 
   useEffect(() => {
     setDisplayProgress(0)
+    currentProgressRef.current = 0
   }, [sessionId])
 
   useEffect(() => {
-    const intervalId = window.setInterval(() => {
-      setDisplayProgress((previousProgress) => {
-        const currentProgress = getProgressValue(previousProgress)
-        const distance = targetProgress - currentProgress
+    let animationFrameId;
 
-        if (Math.abs(distance) < 0.2) {
-          window.clearInterval(intervalId)
-          return targetProgress
-        }
+    const animate = () => {
+      const current = currentProgressRef.current;
+      const dist = targetProgress - current;
 
-        const direction = Math.sign(distance)
-        const easingStep = Math.max(0.18, Math.abs(distance) * 0.055)
-        const nextProgress = currentProgress + direction * easingStep
+      if (Math.abs(dist) < 0.2) {
+        currentProgressRef.current = targetProgress;
+        setDisplayProgress(targetProgress);
+        return;
+      }
 
-        return direction > 0
-          ? Math.min(targetProgress, nextProgress)
-          : Math.max(targetProgress, nextProgress)
-      })
-    }, 16)
+      const step = Math.max(0.15, Math.abs(dist) * 0.08);
+      currentProgressRef.current = current + Math.sign(dist) * step;
+      setDisplayProgress(currentProgressRef.current);
 
-    return () => window.clearInterval(intervalId)
+      animationFrameId = requestAnimationFrame(animate);
+    };
+
+    animationFrameId = requestAnimationFrame(animate);
+
+    return () => cancelAnimationFrame(animationFrameId);
   }, [targetProgress])
 
-  const handleExportMenuClick = (event) => {
-    setExportAnchorEl(event.currentTarget)
-  }
-
-  const handleExportMenuClose = () => {
-    setExportAnchorEl(null)
-  }
+  const handleExportMenuClick = (event) => setExportAnchorEl(event.currentTarget)
+  const handleExportMenuClose = () => setExportAnchorEl(null)
 
   const handleExportDocx = async () => {
     handleExportMenuClose()
     if (!report) return
     setIsExporting(true)
-    
     try {
       const fileContents = buildExportSummary({ sessionId, status, report })
       const reportLabel = report.metadata?.report_id || sessionId
       const fileName = `${reportLabel}-summary.docx`
       await exportToDocx(fileContents, fileName)
     } catch (exportError) {
-      console.error('Failed to export DOCX summary:', exportError)
+      console.error('Failed to export DOCX:', exportError)
     } finally {
       setIsExporting(false)
     }
@@ -287,13 +282,12 @@ const InvestigationPage = ({ sessionId, onBackToUpload, onSessionMissing }) => {
     handleExportMenuClose()
     if (!report || !pdfExportRef.current) return
     setIsExporting(true)
-    
     try {
       const reportLabel = report.metadata?.report_id || sessionId
       const fileName = `${reportLabel}-summary.pdf`
       await exportToPdf(pdfExportRef.current, fileName)
     } catch (exportError) {
-      console.error('Failed to export PDF summary:', exportError)
+      console.error('Failed to export PDF:', exportError)
     } finally {
       setIsExporting(false)
     }
@@ -303,7 +297,7 @@ const InvestigationPage = ({ sessionId, onBackToUpload, onSessionMissing }) => {
     return (
       <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '60vh' }}>
         <CircularProgress size={60} thickness={4} sx={{ mb: 3 }} />
-        <Typography variant="h6" color="text.secondary">Loading investigation...</Typography>
+        <Typography variant="h6" color="text.secondary">Loading workspace...</Typography>
       </Box>
     )
   }
@@ -311,350 +305,286 @@ const InvestigationPage = ({ sessionId, onBackToUpload, onSessionMissing }) => {
   if (error) {
     return (
       <Box sx={{ maxWidth: 600, mx: 'auto', mt: 4, textAlign: 'center' }}>
-        <ErrorOutlineIcon sx={{ fontSize: 80, color: 'error.main', mb: 2 }} />
-        <Typography variant="h5" gutterBottom>Error Loading Investigation</Typography>
-        <Typography variant="body1" color="text.secondary" sx={{ mb: 4 }}>{error}</Typography>
-        <Button variant="contained" onClick={onBackToUpload}>Upload New File</Button>
+        <Alert 
+          severity="error" 
+          variant="filled"
+          sx={{ 
+            mb: 4, 
+            bgcolor: 'rgba(244, 63, 94, 0.1)', 
+            color: '#fecdd3', 
+            border: '1px solid rgba(244, 63, 94, 0.3)',
+            '& .MuiAlert-icon': { color: '#fb7185' }
+          }}
+        >
+          {error}
+        </Alert>
+        <Button variant="outlined" color="primary" onClick={onBackToUpload}>Back to Upload</Button>
       </Box>
     )
   }
 
   return (
-    <Box sx={{ maxWidth: 1180, mx: 'auto', width: '100%', py: 4 }}>
-      <Stack direction={{ xs: 'column', lg: 'row' }} justifyContent="space-between" spacing={3} sx={{ mb: 4 }}>
-        <Box sx={{ maxWidth: 720 }}>
-          <Typography variant="overline" color="primary.main">
-            Investigation workspace
-          </Typography>
-          <Typography variant="h3" sx={{ mt: 0.75, mb: 1.25 }}>
-            Detection review and evidence summary
-          </Typography>
-          <Typography variant="body1" color="text.secondary" sx={{ mb: 2.5 }}>
-            Review investigation progress, anomaly evidence, and incident recommendations in a cleaner analyst-oriented layout.
-          </Typography>
-          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.25}>
-            <Chip label={statusLabel} color={getStatusChipColor(status?.status)} variant="outlined" />
-            <Chip label={`Session ${sessionId}`} variant="outlined" sx={{ fontFamily: 'monospace' }} />
-          </Stack>
-        </Box>
-
-        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} alignItems={{ xs: 'stretch', sm: 'center' }}>
-          <Button 
-            variant="outlined" 
-            startIcon={<ArrowOutwardRoundedIcon />} 
-            endIcon={<KeyboardArrowDownIcon />}
-            onClick={handleExportMenuClick} 
-            disabled={!report || isExporting}
-          >
-            {isExporting ? 'Exporting...' : 'Export'}
-          </Button>
-          <Menu
-            anchorEl={exportAnchorEl}
-            open={exportMenuOpen}
-            onClose={handleExportMenuClose}
-            anchorOrigin={{
-              vertical: 'bottom',
-              horizontal: 'right',
-            }}
-            transformOrigin={{
-              vertical: 'top',
-              horizontal: 'right',
-            }}
-          >
-            <MenuItem onClick={handleExportPdf}>
-              <ListItemIcon>
-                <PictureAsPdfIcon fontSize="small" color="error" />
-              </ListItemIcon>
-              Export as PDF
-            </MenuItem>
-            <MenuItem onClick={handleExportDocx}>
-              <ListItemIcon>
-                <DescriptionIcon fontSize="small" color="info" />
-              </ListItemIcon>
-              Export as Word (.docx)
-            </MenuItem>
-          </Menu>
-          <Button variant="contained" startIcon={<AddBoxIcon />} onClick={onBackToUpload}>
-            New upload
-          </Button>
-        </Stack>
-      </Stack>
-
-      <Grid container spacing={2} sx={{ mb: 4 }}>
-        {summaryCards.map((card) => (
-          <Grid item xs={12} sm={6} lg={3} key={card.label}>
-            <Paper elevation={0} sx={{ p: 2.5, borderRadius: 3, height: '100%', borderLeft: '2px solid', borderLeftColor: card.tone }}>
-              <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={2}>
-                <Box>
-                  <Typography variant="overline" color="text.secondary">
-                    {card.label}
-                  </Typography>
-                  <Typography variant="h4" sx={{ mt: 1, color: card.tone }}>
-                    {card.value}
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                    {card.helper}
-                  </Typography>
-                </Box>
-                <Box sx={{ color: card.tone, mt: 0.5 }}>
-                  {card.icon}
-                </Box>
-              </Stack>
-            </Paper>
-          </Grid>
-        ))}
-      </Grid>
-
-      {status && (
-        <Paper elevation={0} sx={{ p: { xs: 2.5, md: 3 }, mb: 4, borderRadius: 3 }}>
-          <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" spacing={2} sx={{ mb: 3 }}>
-            <Box>
-              <Typography variant="h6">Investigation progress</Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-                Current pipeline state, active stage, and completion progress.
-              </Typography>
-            </Box>
-            <Chip 
-              label={statusLabel}
-              color={getStatusChipColor(status.status)}
-              size="small"
-              variant="outlined"
-              sx={{ fontWeight: 'bold', alignSelf: 'flex-start' }}
-            />
-          </Stack>
-          
-          <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
-            <Box sx={{ width: '100%', mr: 2 }}>
-              <LinearProgress 
-                variant="determinate" 
-                value={displayProgress} 
-                color={status.status === 'completed' ? 'success' : 'primary'}
-                sx={{
-                  height: 8,
-                  borderRadius: 4,
-                  overflow: 'hidden',
-                }}
-              />
-            </Box>
-            <Box sx={{ minWidth: 35 }}>
-              <Typography variant="body2" color="text.secondary">{`${Math.round(displayProgress)}%`}</Typography>
-            </Box>
-          </Box>
-
-          <Box sx={{ mt: 3, mb: 2.5 }}>
-            <Typography variant="overline" color="text.secondary" display="block" gutterBottom>Current stage</Typography>
-            <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>{stageLabel}</Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-              {stageDescription}
+    <Box sx={{ maxWidth: 1200, mx: 'auto', width: '100%', py: 4 }}>
+      {/* Top Summary Card */}
+      <Paper elevation={0} sx={{ p: 4, mb: 4, borderRadius: 4, bgcolor: 'rgba(15, 23, 42, 0.62)', backdropFilter: 'blur(14px)', border: '1px solid rgba(148, 163, 184, 0.16)' }}>
+        <Grid container spacing={3} alignItems="center" justifyContent="space-between">
+          <Grid item xs={12} md={7}>
+            <Typography variant="overline" sx={{ color: 'primary.main', fontWeight: 600, letterSpacing: '0.05em' }}>
+              Session Active
             </Typography>
-          </Box>
+            <Typography variant="h4" sx={{ mt: 0.5, mb: 1, fontWeight: 700, color: '#F8FAFC' }}>
+              {status?.status === 'completed' ? 'Investigation Complete' : 'Investigation in Progress'}
+            </Typography>
+            <Typography variant="body1" color="text.secondary" sx={{ mb: 2, fontFamily: 'monospace' }}>
+              ID: {sessionId}
+            </Typography>
+            <Stack direction="row" spacing={1.5} alignItems="center">
+              <Chip 
+                icon={status?.status === 'completed' ? <CheckCircleIcon /> : status?.status === 'error' ? <ErrorOutlineIcon /> : <CircularProgress size={14} color="inherit" />}
+                label={statusLabel} 
+                color={getStatusChipColor(status?.status)} 
+                variant="outlined" 
+                sx={{ fontWeight: 600 }}
+              />
+              {report?.metadata?.severity && (
+                <Chip 
+                  icon={<ShieldOutlinedIcon />}
+                  label={`Severity: ${severity}`}
+                  color={severityColor}
+                  sx={{ fontWeight: 600 }}
+                />
+              )}
+            </Stack>
+          </Grid>
+          
+          <Grid item xs={12} md={5} sx={{ textAlign: { xs: 'left', md: 'right' } }}>
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} justifyContent={{ xs: 'flex-start', md: 'flex-end' }}>
+              <Button 
+                variant="outlined" 
+                startIcon={<ArrowOutwardRoundedIcon />} 
+                endIcon={<KeyboardArrowDownIcon />}
+                onClick={handleExportMenuClick} 
+                disabled={!report || isExporting}
+                sx={{ bgcolor: 'rgba(15, 23, 42, 0.5)' }}
+              >
+                {isExporting ? 'Exporting...' : 'Export Report'}
+              </Button>
+              <Menu
+                anchorEl={exportAnchorEl}
+                open={exportMenuOpen}
+                onClose={handleExportMenuClose}
+                PaperProps={{
+                  sx: { bgcolor: 'rgba(15, 23, 42, 0.9)', backdropFilter: 'blur(10px)', border: '1px solid rgba(255,255,255,0.1)' }
+                }}
+              >
+                <MenuItem onClick={handleExportPdf} sx={{ color: '#F8FAFC' }}>
+                  <ListItemIcon><PictureAsPdfIcon fontSize="small" sx={{ color: '#f43f5e' }} /></ListItemIcon>
+                  Export PDF
+                </MenuItem>
+                <MenuItem onClick={handleExportDocx} sx={{ color: '#F8FAFC' }}>
+                  <ListItemIcon><DescriptionIcon fontSize="small" sx={{ color: '#3b82f6' }} /></ListItemIcon>
+                  Export DOCX
+                </MenuItem>
+              </Menu>
+              <Button variant="contained" startIcon={<AddBoxIcon />} onClick={onBackToUpload}>
+                New Investigation
+              </Button>
+            </Stack>
+          </Grid>
+        </Grid>
+      </Paper>
 
-          {status.status === 'completed' && (
-            <Box
-              sx={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 1.5,
-                px: 2,
-                py: 1.5,
-                borderRadius: 2,
-                bgcolor: 'rgba(16, 185, 129, 0.08)',
-                border: '1px solid',
-                borderColor: 'success.dark',
-                color: 'success.light',
-              }}
-            >
-              <CheckCircleIcon fontSize="small" />
-              <Box>
-                <Typography variant="caption" sx={{ display: 'block', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-                  Completed
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  {stageDescription}
-                </Typography>
-              </Box>
-            </Box>
-          )}
-
-          {status.status === 'processing' && (
-            <ThinkingIndicator stageLabel={stageLabel} message={stageDescription} />
-          )}
-
-          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 3 }}>
-            {stages.map((stage, idx) => {
-              const currentStageIdx = stages.findIndex(s => s.id === status.stage)
-              const isActive = stage.id === status.stage
-              const isCompleted = idx < currentStageIdx || status.status === 'completed'
-
-              let color = 'default'
-              if (isActive) color = 'primary'
-              if (isCompleted) color = 'success'
-
-              return (
-                <Chip
-                  key={stage.id}
-                  icon={isCompleted ? <CheckCircleIcon /> : stage.icon}
-                  label={stage.name}
-                  color={color}
-                  variant={isActive || isCompleted ? 'filled' : 'outlined'}
-                  sx={{ 
-                    opacity: isActive || isCompleted ? 1 : 0.5,
-                    fontWeight: isActive ? 600 : 400
+      {/* Progress & Stepper */}
+      {status && (
+        <Paper elevation={0} sx={{ p: 4, mb: 4, borderRadius: 4, bgcolor: 'rgba(15, 23, 42, 0.4)', backdropFilter: 'blur(10px)', border: '1px solid rgba(255,255,255,0.05)' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', mb: 3 }}>
+            <Box sx={{ width: '100%', mr: 2 }}>
+              <Box 
+                sx={{
+                  height: 12,
+                  borderRadius: 6,
+                  bgcolor: 'rgba(255,255,255,0.08)',
+                  overflow: 'hidden',
+                  position: 'relative'
+                }}
+              >
+                <Box 
+                  sx={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    height: '100%',
+                    width: `${Math.max(0, Math.min(100, displayProgress))}%`,
+                    backgroundImage: status.status === 'completed' 
+                      ? 'linear-gradient(90deg, #10b981 0%, #34d399 100%)' 
+                      : status.status === 'error'
+                      ? 'linear-gradient(90deg, #f43f5e 0%, #fb7185 100%)'
+                      : 'linear-gradient(90deg, #6366f1 0%, #06b6d4 100%)',
+                    borderRadius: 6,
+                    transition: 'none', // Handled smoothly by requestAnimationFrame
                   }}
                 />
-              )
-            })}
+              </Box>
+            </Box>
+            <Box sx={{ minWidth: 40, textAlign: 'right' }}>
+              <Typography variant="body1" sx={{ fontWeight: 700, color: '#F8FAFC' }}>{`${Math.round(displayProgress)}%`}</Typography>
+            </Box>
+          </Box>
+
+          <Stepper activeStep={activeStep} alternativeLabel sx={{ 
+            display: { xs: 'none', md: 'flex' },
+            '& .MuiStepConnector-line': { borderColor: 'rgba(255,255,255,0.1)' }
+          }}>
+            {pipelineStages.map((stage, index) => (
+              <Step key={stage.id} completed={index < activeStep || status.status === 'completed'}>
+                <StepLabel
+                  StepIconProps={{
+                    sx: {
+                      color: 'rgba(255,255,255,0.1) !important',
+                      '&.Mui-active': { color: '#06b6d4 !important' },
+                      '&.Mui-completed': { color: '#10b981 !important' },
+                      '& text': { fill: '#fff !important', fontWeight: 600 }
+                    }
+                  }}
+                >
+                  <Typography variant="caption" sx={{ color: index === activeStep ? '#F8FAFC' : 'text.secondary', fontWeight: index === activeStep ? 600 : 400 }}>
+                    {stage.label}
+                  </Typography>
+                </StepLabel>
+              </Step>
+            ))}
+          </Stepper>
+          
+          <Box sx={{ mt: 3, p: 2, bgcolor: 'rgba(255,255,255,0.02)', borderRadius: 2, border: '1px solid rgba(255,255,255,0.05)' }}>
+             <Typography variant="caption" color="text.secondary" display="block" sx={{ textTransform: 'uppercase', letterSpacing: '0.05em', mb: 0.5 }}>Current Message</Typography>
+             <Typography variant="body2" sx={{ color: '#F8FAFC', fontWeight: 500 }}>{status.current_message || 'Processing...'}</Typography>
           </Box>
         </Paper>
       )}
 
-      {report && (
-        <Stack spacing={4}>
-          <Paper elevation={0} sx={{ p: { xs: 2.5, md: 4 }, borderRadius: 3 }}>
-            <Typography variant="h6" gutterBottom>Executive summary</Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-              Consolidated report metadata and the highest-level interpretation of the session.
-            </Typography>
-            
-            <Grid container spacing={3} sx={{ mb: 4, mt: 1 }}>
-              <Grid item xs={12} sm={4}>
-                <Typography variant="overline" color="text.secondary" display="block">Report ID</Typography>
-                <Typography variant="body1" sx={{ fontFamily: 'monospace' }}>{report.metadata.report_id}</Typography>
+      {/* Metrics Overview */}
+      {(status?.summary || report) && (
+        <Grid container spacing={2} sx={{ mb: 4 }}>
+          {metricCards.map((card, idx) => (
+            card.value !== 'N/A' && (
+              <Grid item xs={6} sm={3} key={idx}>
+                <Paper elevation={0} sx={{ p: 3, borderRadius: 3, textAlign: 'center', bgcolor: 'rgba(15, 23, 42, 0.62)', backdropFilter: 'blur(10px)', border: '1px solid rgba(255,255,255,0.05)' }}>
+                  <Typography variant="h3" sx={{ color: 'primary.main', fontWeight: 700, mb: 0.5 }}>{card.value}</Typography>
+                  <Typography variant="overline" color="text.secondary" sx={{ letterSpacing: '0.05em' }}>{card.label}</Typography>
+                </Paper>
               </Grid>
-              <Grid item xs={12} sm={4}>
-                <Typography variant="overline" color="text.secondary" display="block">Severity</Typography>
-                <Chip 
-                  label={report.metadata.severity} 
-                  size="small"
-                  color={severityColor}
-                  sx={{ fontWeight: 'bold', mt: 0.5 }}
-                />
-              </Grid>
-              <Grid item xs={12} sm={4}>
-                <Typography variant="overline" color="text.secondary" display="block">Timestamp</Typography>
-                <Typography variant="body2">{formatDisplayDate(report.metadata.timestamp)}</Typography>
-              </Grid>
-            </Grid>
+            )
+          ))}
+        </Grid>
+      )}
 
-            {report.executive_summary && (
-              <Suspense fallback={<Typography color="text.secondary">Loading summary...</Typography>}>
-                <MarkdownRenderer content={report.executive_summary} />
-              </Suspense>
-            )}
-          </Paper>
+      {/* Report Section */}
+      {status?.status === 'completed' && report && (
+        <Paper elevation={0} sx={{ borderRadius: 4, bgcolor: 'rgba(15, 23, 42, 0.62)', backdropFilter: 'blur(14px)', border: '1px solid rgba(148, 163, 184, 0.16)', overflow: 'hidden' }}>
+          <Box sx={{ borderBottom: 1, borderColor: 'divider', bgcolor: 'rgba(0,0,0,0.2)' }}>
+            <Tabs 
+              value={activeTab} 
+              onChange={(e, newValue) => setActiveTab(newValue)} 
+              variant="scrollable" 
+              scrollButtons="auto"
+              sx={{ 
+                '& .MuiTab-root': { color: 'text.secondary', fontWeight: 600, py: 2.5 },
+                '& .Mui-selected': { color: 'primary.main' }
+              }}
+            >
+              <Tab icon={<ArticleIcon sx={{ mb: 0 }}/>} iconPosition="start" label="Overview" />
+              <Tab icon={<BugReportIcon sx={{ mb: 0 }}/>} iconPosition="start" label="IOCs" disabled={!report.ioc_analysis || report.ioc_analysis.length === 0} />
+              <Tab icon={<TimelineIcon sx={{ mb: 0 }}/>} iconPosition="start" label="Timeline" disabled={!report.attack_timeline || report.attack_timeline.length === 0} />
+              <Tab icon={<LightbulbIcon sx={{ mb: 0 }}/>} iconPosition="start" label="Recommendations" disabled={!report.recommendations || report.recommendations.length === 0} />
+            </Tabs>
+          </Box>
 
-          {report.ioc_analysis && report.ioc_analysis.length > 0 && (
-            <Paper elevation={0} sx={{ p: { xs: 2.5, md: 4 }, borderRadius: 3 }}>
-              <Typography variant="h6" gutterBottom>Indicators of compromise</Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-                Extracted suspicious artifacts and their associated threat context.
-              </Typography>
-              
-              <Grid container spacing={2} sx={{ mb: 4, mt: 1 }}>
-                {[
-                  { label: 'Total IOCs', count: report.ioc_analysis.length },
-                  { label: 'Hashes', count: report.ioc_analysis.filter(ioc => ioc.type === 'md5' || ioc.type === 'sha256').length },
-                  { label: 'IP Addresses', count: report.ioc_analysis.filter(ioc => ioc.type === 'ip').length },
-                  { label: 'Domains', count: report.ioc_analysis.filter(ioc => ioc.type === 'domain').length }
-                ].map((stat, idx) => (
-                  <Grid item xs={6} sm={3} key={idx}>
-                    <Box sx={{ p: 2, bgcolor: 'rgba(255,255,255,0.02)', borderRadius: 2, textAlign: 'center', border: '1px solid', borderColor: 'divider' }}>
-                      <Typography variant="h4" color="primary.main">{stat.count}</Typography>
-                      <Typography variant="overline" color="text.secondary">{stat.label}</Typography>
-                    </Box>
-                  </Grid>
-                ))}
-              </Grid>
+          <Box sx={{ p: { xs: 3, md: 5 } }}>
+            <TabPanel value={activeTab} index={0}>
+              <Typography variant="h5" sx={{ mb: 3, fontWeight: 700, color: '#F8FAFC' }}>Executive Summary</Typography>
+              {report.executive_summary ? (
+                <Suspense fallback={<Typography color="text.secondary">Loading summary...</Typography>}>
+                  <MarkdownRenderer content={report.executive_summary} />
+                </Suspense>
+              ) : (
+                <Typography color="text.secondary">No executive summary available.</Typography>
+              )}
+            </TabPanel>
 
+            <TabPanel value={activeTab} index={1}>
+              <Typography variant="h5" sx={{ mb: 3, fontWeight: 700, color: '#F8FAFC' }}>Indicators of Compromise</Typography>
               <Stack spacing={2}>
-                {report.ioc_analysis.map((ioc, idx) => (
-                  <Box key={idx} sx={{ p: 2.25, border: 1, borderColor: 'divider', borderRadius: 2.5, bgcolor: 'rgba(255,255,255,0.015)' }}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', mb: ioc.threat_intel ? 1 : 0, flexWrap: 'wrap', gap: 1.25 }}>
+                {(report.ioc_analysis || []).map((ioc, idx) => (
+                  <Box key={idx} sx={{ p: 2.5, border: '1px solid rgba(255,255,255,0.1)', borderRadius: 3, bgcolor: 'rgba(255,255,255,0.02)' }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', mb: ioc.threat_intel ? 1.5 : 0, flexWrap: 'wrap', gap: 1.5 }}>
                       <Chip 
-                        label={ioc.type.toUpperCase()} 
+                        label={ioc.type?.toUpperCase()} 
                         size="small"
-                        color={
-                          ioc.threat_level === 'high' ? 'error' :
-                          ioc.threat_level === 'medium' ? 'warning' : 'info'
-                        }
-                        sx={{ minWidth: 60 }}
+                        color={ioc.threat_level === 'high' ? 'error' : ioc.threat_level === 'medium' ? 'warning' : 'info'}
+                        sx={{ fontWeight: 700 }}
                       />
-                      <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>
+                      <Typography variant="body1" sx={{ fontFamily: 'monospace', fontWeight: 600, color: '#F8FAFC' }}>
                         {ioc.value}
                       </Typography>
                     </Box>
                     {ioc.threat_intel && (
-                      <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                      <Typography variant="body2" color="text.secondary" sx={{ p: 1.5, bgcolor: 'rgba(0,0,0,0.2)', borderRadius: 2 }}>
                         {ioc.threat_intel}
                       </Typography>
                     )}
                   </Box>
                 ))}
               </Stack>
-            </Paper>
-          )}
+            </TabPanel>
 
-          {report.attack_timeline && report.attack_timeline.length > 0 && (
-            <Paper elevation={0} sx={{ p: { xs: 2.5, md: 4 }, borderRadius: 3 }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', mb: 3 }}>
-                <TimelineIcon sx={{ mr: 1.5, color: 'primary.main' }} />
-                <Box>
-                  <Typography variant="h6">Attack timeline</Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    Ordered event sequence showing how the incident unfolded over time.
-                  </Typography>
-                </Box>
-              </Box>
-              
-              <Box sx={{ position: 'relative', pl: 3, borderLeft: 2, borderColor: 'divider', ml: 1 }}>
-                {report.attack_timeline.map((event, idx) => (
-                  <Box key={idx} sx={{ position: 'relative', mb: 4, '&:last-child': { mb: 0 } }}>
+            <TabPanel value={activeTab} index={2}>
+              <Typography variant="h5" sx={{ mb: 4, fontWeight: 700, color: '#F8FAFC' }}>Attack Timeline</Typography>
+              <Box sx={{ position: 'relative', pl: 3.5, borderLeft: '2px solid rgba(6, 182, 212, 0.3)', ml: 1 }}>
+                {(report.attack_timeline || []).map((event, idx) => (
+                  <Box key={idx} sx={{ position: 'relative', mb: 5, '&:last-child': { mb: 0 } }}>
                     <Box sx={{ 
                       position: 'absolute', 
-                      left: -33, 
+                      left: -37, 
                       top: 4,
-                      width: 12, 
-                      height: 12, 
+                      width: 14, 
+                      height: 14, 
                       borderRadius: '50%', 
-                      bgcolor: 'primary.main',
-                      border: '2px solid',
-                      borderColor: 'background.paper'
+                      bgcolor: '#06b6d4',
+                      border: '3px solid #0f172a',
+                      boxShadow: '0 0 10px rgba(6,182,212,0.5)'
                     }} />
-                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600, display: 'block', mb: 0.5 }}>
+                    <Typography variant="caption" sx={{ color: 'primary.main', fontWeight: 700, display: 'block', mb: 1, letterSpacing: '0.05em' }}>
                       {formatDisplayDate(event.timestamp)}
                     </Typography>
-                    <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 0.5 }}>
+                    <Typography variant="h6" sx={{ fontWeight: 600, mb: 1, color: '#F8FAFC', lineHeight: 1.3 }}>
                       {event.event}
                     </Typography>
                     {event.details && (
-                      <Typography variant="body2" color="text.secondary">
+                      <Typography variant="body2" color="text.secondary" sx={{ bgcolor: 'rgba(255,255,255,0.02)', p: 2, borderRadius: 2, border: '1px solid rgba(255,255,255,0.05)' }}>
                         {event.details}
                       </Typography>
                     )}
                   </Box>
                 ))}
               </Box>
-            </Paper>
-          )}
+            </TabPanel>
 
-          {report.recommendations && report.recommendations.length > 0 && (
-            <Paper elevation={0} sx={{ p: { xs: 2.5, md: 4 }, borderRadius: 3 }}>
-              <Typography variant="h6" gutterBottom>Recommendations</Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ mb: 2.5 }}>
-                Actionable next steps based on the current evidence and severity profile.
-              </Typography>
-              <Box component="ul" sx={{ m: 0, pl: 2 }}>
-                {report.recommendations.map((rec, idx) => (
-                  <Box component="li" key={idx} sx={{ mb: 1, color: 'text.secondary' }}>
-                    <Suspense fallback={<Typography color="text.secondary">Loading recommendation...</Typography>}>
-                      <MarkdownRenderer content={rec} />
-                    </Suspense>
+            <TabPanel value={activeTab} index={3}>
+              <Typography variant="h5" sx={{ mb: 3, fontWeight: 700, color: '#F8FAFC' }}>Recommendations</Typography>
+              <Box component="ul" sx={{ m: 0, pl: 0, listStyle: 'none' }}>
+                {(report.recommendations || []).map((rec, idx) => (
+                  <Box component="li" key={idx} sx={{ mb: 2 }}>
+                    <Paper elevation={0} sx={{ p: 2.5, bgcolor: 'rgba(16, 185, 129, 0.05)', border: '1px solid rgba(16, 185, 129, 0.2)', borderRadius: 3 }}>
+                      <Suspense fallback={<Typography color="text.secondary">Loading recommendation...</Typography>}>
+                        <MarkdownRenderer content={rec} />
+                      </Suspense>
+                    </Paper>
                   </Box>
                 ))}
               </Box>
-            </Paper>
-          )}
-        </Stack>
+            </TabPanel>
+          </Box>
+        </Paper>
       )}
 
       {/* Hidden export template for PDF generation */}
