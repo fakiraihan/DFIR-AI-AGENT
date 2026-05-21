@@ -1,0 +1,817 @@
+{
+  "api_documentation": {
+    "malwarebazaar": {
+      "service_name": "MalwareBazaar",
+      "provider": "abuse.ch",
+      "endpoint": "https://mb-api.abuse.ch/api/v1/",
+      "auth_method": "header",
+      "auth_header": "Auth-Key",
+      "rate_limit": "none_specified",
+      "rate_limit_notes": "Daily download limit exists, but query API unlimited",
+      "best_for": [
+        "file_hash",
+        "malware_sample_metadata"
+      ],
+      "supported_ioc_types": [
+        "md5",
+        "sha256",
+        "sha1"
+      ],
+      "response_format": "json",
+      "key_response_fields": [
+        "query_status",
+        "sha256_hash",
+        "md5_hash",
+        "signature",
+        "file_type",
+        "first_seen",
+        "malware_bazaar",
+        "tags"
+      ],
+      "query_types": {
+        "get_info": "Query malware sample by hash (MD5/SHA256/SHA1)",
+        "get_taginfo": "Get samples by tag (max 1000)",
+        "get_siginfo": "Get samples by signature/malware family",
+        "recent_additions": "Get recent samples (past 60 min)"
+      },
+      "reliability_score": 0.9,
+      "avg_response_time": 1.2,
+      "cost": "free",
+      "fair_use_policy": true,
+      "unique_features": [
+        "Malware sample download capability",
+        "ClamAV signatures",
+        "YARA rules",
+        "Code signing certificate info"
+      ],
+      "error_handling": {
+        "hash_not_found": "Hash is unknown to database",
+        "illegal_hash": "Invalid hash format",
+        "no_hash_provided": "Missing hash parameter"
+      },
+      "learned_patterns": {
+        "success_rate": 0.972,
+        "typical_response_time": 1.39,
+        "best_use_case": "File hash validation and malware family identification"
+      }
+    },
+    "threatfox": {
+      "service_name": "ThreatFox",
+      "provider": "abuse.ch",
+      "endpoint": "https://threatfox-api.abuse.ch/api/v1/",
+      "auth_method": "header",
+      "auth_header": "Auth-Key",
+      "rate_limit": "unlimited",
+      "rate_limit_notes": "Free tier unlimited, community API",
+      "best_for": [
+        "ip_address",
+        "domain",
+        "url",
+        "file_hash",
+        "network_iocs"
+      ],
+      "supported_ioc_types": [
+        "ip",
+        "domain",
+        "url",
+        "md5",
+        "sha256"
+      ],
+      "response_format": "json",
+      "key_response_fields": [
+        "query_status",
+        "ioc",
+        "threat_type",
+        "ioc_type",
+        "malware",
+        "malware_printable",
+        "confidence_level",
+        "first_seen",
+        "tags"
+      ],
+      "query_types": {
+        "search_ioc": "Search for specific IOC (exact or wildcard)",
+        "search_hash": "Search IOCs by file hash (MD5/SHA256)",
+        "get_iocs": "Get recent IOCs (1-7 days)",
+        "taginfo": "Query IOCs by tag",
+        "malwareinfo": "Query IOCs by malware family"
+      },
+      "reliability_score": 0.85,
+      "avg_response_time": 1.5,
+      "cost": "free",
+      "fair_use_policy": true,
+      "unique_features": [
+        "IOC expiration (6 months)",
+        "Confidence levels (0-100)",
+        "Threat type classification",
+        "Malware family associations",
+        "Malpedia integration"
+      ],
+      "ioc_expiration_policy": "IOCs older than 6 months are expired (since 2025-05-01)",
+      "threat_types": [
+        "botnet_cc",
+        "payload_delivery",
+        "cc_skimming",
+        "malware_config"
+      ],
+      "error_handling": {
+        "no_results": "Query yielded no results",
+        "illegal_search_term": "Invalid search term format"
+      },
+      "learned_patterns": {
+        "success_rate": 0.991,
+        "typical_response_time": 2.4,
+        "best_use_case": "Network IOC enrichment with malware context"
+      }
+    },
+    "urlhaus": {
+      "service_name": "URLhaus",
+      "provider": "abuse.ch",
+      "endpoint": "https://urlhaus-api.abuse.ch/",
+      "auth_method": "uri_parameter",
+      "auth_parameter": "auth-key",
+      "rate_limit": "5_minutes",
+      "rate_limit_notes": "Database dumps updated every 5 minutes, don't fetch more often",
+      "best_for": [
+        "url_reputation",
+        "domain_reputation",
+        "malware_distribution"
+      ],
+      "supported_ioc_types": [
+        "url",
+        "domain",
+        "hostname"
+      ],
+      "response_format": "multiple",
+      "response_formats": [
+        "csv",
+        "json",
+        "rpz",
+        "hosts",
+        "snort"
+      ],
+      "key_response_fields": [
+        "query_status",
+        "url",
+        "url_status",
+        "host",
+        "date_added",
+        "threat",
+        "tags",
+        "urlhaus_link"
+      ],
+      "query_types": {
+        "database_dump": "Full database (active + past 90 days)",
+        "recent": "Recent URLs only",
+        "rpz": "DNS Response Policy Zone format",
+        "ids_rules": "Snort/Suricata IDS ruleset"
+      },
+      "reliability_score": 0.88,
+      "avg_response_time": 2.0,
+      "cost": "free",
+      "fair_use_policy": true,
+      "unique_features": [
+        "DNS RPZ blocklist",
+        "IDS/IPS rulesets (Snort/Suricata)",
+        "ClamAV signatures",
+        "MISP daily events",
+        "Geo-IP filtering awareness"
+      ],
+      "active_threshold": "Active URLs or added within past 48-90 days",
+      "error_handling": {
+        "no_url_found": "URL not found in database",
+        "invalid_url": "Invalid URL format"
+      },
+      "learned_patterns": {
+        "success_rate": 0.811,
+        "typical_response_time": 1.79,
+        "best_use_case": "URL and domain malware distribution validation"
+      }
+    },
+    "alienvault_otx": {
+      "service_name": "AlienVault OTX",
+      "provider": "LevelBlue (formerly AlienVault)",
+      "endpoint": "https://otx.alienvault.com/api/v1/",
+      "auth_method": "header",
+      "auth_header": "X-OTX-API-KEY",
+      "rate_limit": "not_specified",
+      "rate_limit_notes": "No explicit rate limit, but fair use expected",
+      "best_for": [
+        "multi_source_intel",
+        "community_reputation",
+        "pulse_associations"
+      ],
+      "supported_ioc_types": [
+        "ipv4",
+        "ipv6",
+        "domain",
+        "hostname",
+        "url",
+        "file_hash",
+        "cve"
+      ],
+      "response_format": "json",
+      "key_response_fields": [
+        "pulse_info",
+        "general",
+        "reputation",
+        "geo",
+        "malware",
+        "url_list",
+        "passive_dns",
+        "whois",
+        "http_scans"
+      ],
+      "query_types": {
+        "IPv4": "/api/v1/indicators/IPv4/{ip}/{section}",
+        "domain": "/api/v1/indicators/domain/{domain}/{section}",
+        "file": "/api/v1/indicators/file/{hash}/{section}",
+        "url": "/api/v1/indicators/url/{url}/{section}"
+      },
+      "sections": [
+        "general",
+        "reputation",
+        "geo",
+        "malware",
+        "url_list",
+        "passive_dns",
+        "http_scans",
+        "whois"
+      ],
+      "reliability_score": 0.82,
+      "avg_response_time": 2.2,
+      "cost": "free_with_tiers",
+      "unique_features": [
+        "Pulse (threat report) associations",
+        "Community contributions",
+        "Multi-section queries",
+        "Passive DNS data",
+        "Geolocation intelligence"
+      ],
+      "error_handling": {
+        "not_found": "Indicator not found",
+        "invalid_indicator": "Invalid indicator format"
+      },
+      "learned_patterns": {
+        "success_rate": 0.356,
+        "typical_response_time": 2.72,
+        "best_use_case": "Community-driven threat context and pulse associations"
+      }
+    },
+    "greynoise": {
+      "service_name": "GreyNoise",
+      "provider": "GreyNoise Intelligence",
+      "endpoint": "https://api.greynoise.io",
+      "endpoints": {
+        "quick": "/v3/community/{ip}/quick",
+        "full": "/v3/community/{ip}",
+        "multi_quick": "/v3/community/quick",
+        "multi_full": "/v3/community/multi",
+        "gnql": "/v2/experimental/gnql"
+      },
+      "auth_method": "header",
+      "auth_header": "key",
+      "rate_limit": "subscription_dependent",
+      "rate_limit_notes": "Depends on subscription tier, use SDK for high-volume",
+      "best_for": [
+        "ip_classification",
+        "benign_scanner_detection",
+        "noise_filtering"
+      ],
+      "supported_ioc_types": [
+        "ipv4"
+      ],
+      "response_format": "json",
+      "key_response_fields": [
+        "ip",
+        "classification",
+        "seen",
+        "tags",
+        "metadata",
+        "trust_level",
+        "bot",
+        "vpn",
+        "tor"
+      ],
+      "query_types": {
+        "quick": "Fast lookup, small payload",
+        "full": "Complete enrichment data",
+        "multi": "Bulk lookup (up to 10,000 IPs)",
+        "gnql": "Query-based search through NOISE dataset"
+      },
+      "classifications": [
+        "benign",
+        "malicious",
+        "unknown"
+      ],
+      "trust_levels": [
+        "1",
+        "2"
+      ],
+      "reliability_score": 0.92,
+      "avg_response_time": 0.8,
+      "cost": "paid",
+      "cost_notes": "Requires active subscription or enterprise trial",
+      "unique_features": [
+        "Benign internet scanner identification (RIOT)",
+        "Business Services Intelligence",
+        "Tag-based activity classification",
+        "Query Language (GNQL)",
+        "Multi-lookup up to 10K IPs"
+      ],
+      "riot_dataset": "Business services that are benign (CDNs, cloud providers, scanners)",
+      "error_handling": {
+        "ip_not_found": "IP not in GreyNoise dataset",
+        "invalid_ip": "Invalid IP address format"
+      },
+      "learned_patterns": {
+        "success_rate": 0.378,
+        "typical_response_time": 2.7,
+        "best_use_case": "Distinguish benign internet noise from real threats"
+      }
+    },
+    "virustotal": {
+      "service_name": "VirusTotal",
+      "provider": "Google (Chronicle Security)",
+      "endpoint": "https://www.virustotal.com/api/v3/",
+      "auth_method": "header",
+      "auth_header": "x-apikey",
+      "rate_limit": "4_per_minute",
+      "rate_limit_notes": "Free tier: 4 requests/min, paid tiers have higher limits",
+      "best_for": [
+        "multi_av_scan",
+        "file_reputation",
+        "url_scan",
+        "comprehensive_analysis"
+      ],
+      "supported_ioc_types": [
+        "file_hash",
+        "url",
+        "domain",
+        "ip"
+      ],
+      "response_format": "json",
+      "key_response_fields": [
+        "last_analysis_stats",
+        "last_analysis_results",
+        "reputation",
+        "harmless",
+        "malicious",
+        "suspicious",
+        "undetected"
+      ],
+      "reliability_score": 0.95,
+      "avg_response_time": 2.5,
+      "cost": "freemium",
+      "cost_notes": "Free tier limited to 4 req/min, paid tiers available",
+      "unique_features": [
+        "70+ antivirus engines",
+        "Multi-source reputation",
+        "Sandbox analysis",
+        "Behavior reports",
+        "Community comments"
+      ],
+      "backoff_strategy": "exponential",
+      "error_handling": {
+        "429": "Rate limit exceeded - apply exponential backoff",
+        "404": "Resource not found",
+        "400": "Invalid request"
+      },
+      "learned_patterns": {
+        "success_rate": 0.655,
+        "typical_response_time": 1.12,
+        "best_use_case": "Multi-vendor validation and comprehensive threat analysis"
+      }
+    }
+  },
+  "tool_selection_rules": {
+    "ip_address": {
+      "primary": "greynoise",
+      "reason": "Fast classification, distinguishes benign scanners",
+      "fallback": [
+        "alienvault_otx",
+        "threatfox"
+      ],
+      "parallel_allowed": false,
+      "stop_on_first_hit": false,
+      "confidence_multiplier": 1.2
+    },
+    "file_hash": {
+      "primary": "malwarebazaar",
+      "reason": "Specialized malware sample database",
+      "fallback": [
+        "virustotal",
+        "threatfox"
+      ],
+      "parallel_allowed": true,
+      "stop_on_first_hit": true,
+      "confidence_multiplier": 1.5
+    },
+    "domain": {
+      "primary": "urlhaus",
+      "reason": "Specialized in malware distribution URLs",
+      "fallback": [
+        "alienvault_otx",
+        "threatfox"
+      ],
+      "parallel_allowed": false,
+      "stop_on_first_hit": false,
+      "confidence_multiplier": 1.1
+    },
+    "url": {
+      "primary": "urlhaus",
+      "reason": "Primary focus on malware distribution URLs",
+      "fallback": [
+        "virustotal",
+        "threatfox"
+      ],
+      "parallel_allowed": false,
+      "stop_on_first_hit": false,
+      "confidence_multiplier": 1.3
+    }
+  },
+  "investigation_playbooks": {
+    "high_anomaly_score": {
+      "description": "High DeepLog anomaly detected",
+      "steps": [
+        "extract_all_iocs_from_window",
+        "parallel_threat_intel_lookup",
+        "correlate_with_timeline",
+        "assess_lateral_movement_risk",
+        "generate_recommendations"
+      ],
+      "priority": "high",
+      "estimated_time": "5-10 minutes"
+    },
+    "malware_hash_detected": {
+      "description": "Known malware hash found in logs",
+      "steps": [
+        "query_malware_family",
+        "identify_infection_vector",
+        "trace_file_origin",
+        "check_c2_communications",
+        "assess_data_exfiltration_risk",
+        "map_affected_systems"
+      ],
+      "priority": "critical",
+      "estimated_time": "10-15 minutes"
+    },
+    "suspicious_network_activity": {
+      "description": "Unusual network connections detected",
+      "steps": [
+        "classify_ip_reputation",
+        "check_geolocation_anomalies",
+        "identify_port_patterns",
+        "correlate_with_known_c2",
+        "assess_data_transfer_volume"
+      ],
+      "priority": "medium",
+      "estimated_time": "5-8 minutes"
+    },
+    "lateral_movement_indicators": {
+      "description": "Potential lateral movement detected",
+      "steps": [
+        "map_authentication_chain",
+        "check_smb_shares_access",
+        "analyze_psexec_usage",
+        "track_credential_usage",
+        "identify_pivot_points"
+      ],
+      "priority": "critical",
+      "estimated_time": "15-20 minutes"
+    }
+  },
+  "learned_patterns": {
+    "successful_investigations": 0,
+    "total_tool_calls": {},
+    "successful_tool_calls": {},
+    "failed_tool_calls": {},
+    "optimal_tool_sequences": {},
+    "average_investigation_time": 0,
+    "common_false_positives": [],
+    "high_confidence_patterns": []
+  },
+  "performance_metrics": {
+    "tool_reliability": {
+      "malwarebazaar_total": 52,
+      "malwarebazaar_success": 51,
+      "virustotal_total": 61,
+      "virustotal_success": 41,
+      "threatfox_total": 97,
+      "threatfox_success": 95,
+      "alienvault_otx_total": 36,
+      "alienvault_otx_success": 10,
+      "urlhaus_total": 9,
+      "urlhaus_success": 9,
+      "greynoise_total": 17,
+      "greynoise_success": 1
+    },
+    "tool_response_times": {
+      "malwarebazaar": [
+        1.403817892074585,
+        1.4543631076812744,
+        1.4699671268463135,
+        1.503389596939087,
+        1.4630391597747803,
+        1.458564281463623,
+        1.4650988578796387,
+        1.4277737140655518,
+        1.4610910415649414,
+        1.4437625408172607,
+        1.3944423198699951,
+        1.4570691585540771,
+        1.446760654449463,
+        1.435133695602417,
+        1.4190778732299805,
+        1.3630242347717285,
+        1.4261064529418945,
+        1.4115817546844482,
+        1.5912580490112305,
+        1.3998992443084717,
+        1.3808925151824951,
+        0.4530916213989258,
+        1.395165205001831,
+        1.44126296043396,
+        1.3595998287200928,
+        1.4833152294158936,
+        1.3787448406219482,
+        1.486997127532959,
+        1.3856253623962402,
+        1.36649751663208,
+        1.3858392238616943,
+        1.3821945190429688,
+        1.378242015838623,
+        1.3818764686584473,
+        1.3797621726989746,
+        1.35957670211792,
+        1.3834598064422607,
+        1.389908790588379,
+        1.425658941268921,
+        1.4331154823303223,
+        1.3815648555755615,
+        1.3759071826934814,
+        1.384864091873169,
+        1.3674542903900146,
+        1.3846161365509033,
+        1.41941499710083,
+        1.3668780326843262,
+        1.3488008975982666,
+        1.398423194885254,
+        1.397279977798462,
+        1.4140186309814453,
+        1.3838200569152832
+      ],
+      "virustotal": [
+        1.251359224319458,
+        0.7715833187103271,
+        1.3993206024169922,
+        0.7961087226867676,
+        0.8303425312042236,
+        4.133850812911987,
+        1.2335598468780518,
+        0.7181575298309326,
+        0.9280350208282471,
+        1.3147268295288086,
+        0.9817414283752441,
+        1.098768949508667,
+        0.8168256282806396,
+        0.8141269683837891,
+        0.7934145927429199,
+        0.7171478271484375,
+        0.7989540100097656,
+        0.8004932403564453,
+        0.7867577075958252,
+        0.9162211418151855,
+        0.8131158351898193,
+        1.1649281978607178,
+        1.3945972919464111,
+        0.7640011310577393,
+        0.7805929183959961,
+        0.7612030506134033,
+        0.7978382110595703,
+        0.8191726207733154,
+        0.8394138813018799,
+        0.832160472869873,
+        0.9723906517028809,
+        0.6983401775360107,
+        1.279226541519165,
+        0.8045225143432617,
+        0.8160498142242432,
+        0.7338757514953613,
+        0.6850330829620361,
+        0.7490558624267578,
+        0.8162820339202881,
+        0.8569228649139404,
+        0.6988599300384521,
+        0.7696905136108398,
+        0.8764564990997314,
+        0.7653613090515137,
+        1.0122885704040527,
+        1.0703582763671875,
+        0.7350385189056396,
+        0.7678272724151611,
+        0.7492945194244385,
+        0.7706735134124756,
+        0.781886100769043,
+        0.8334527015686035,
+        0.7675421237945557,
+        0.7335934638977051,
+        0.7495608329772949,
+        1.8008301258087158,
+        0.7230455875396729,
+        1.6496217250823975,
+        1.615922212600708,
+        1.5224254131317139,
+        1.514158010482788
+      ],
+      "threatfox": [
+        1.498030662536621,
+        1.4824371337890625,
+        1.417104959487915,
+        1.4155213832855225,
+        1.3656070232391357,
+        1.3635478019714355,
+        1.7178313732147217,
+        1.412956714630127,
+        1.385714054107666,
+        1.569399356842041,
+        1.6194007396697998,
+        1.368790864944458,
+        1.3851158618927002,
+        0.8521840572357178,
+        1.4135124683380127,
+        1.3522789478302002,
+        1.3986563682556152,
+        1.3662855625152588,
+        1.3624751567840576,
+        1.3858661651611328,
+        1.3662705421447754,
+        1.3831591606140137,
+        0.762603759765625,
+        1.3452796936035156,
+        0.7757153511047363,
+        0.4330320358276367,
+        1.3804779052734375,
+        1.5002198219299316,
+        1.4987590312957764,
+        0.9043524265289307,
+        1.4346718788146973,
+        0.4441103935241699,
+        1.3518388271331787,
+        1.3602962493896484,
+        0.7663784027099609,
+        0.7226946353912354,
+        1.340770959854126,
+        0.8818027973175049,
+        1.4037094116210938,
+        1.2845864295959473,
+        0.7670378684997559,
+        1.3463540077209473,
+        1.4856746196746826,
+        1.7001063823699951,
+        0.7766263484954834,
+        0.7165205478668213,
+        0.8145167827606201,
+        0.7494361400604248,
+        1.33205246925354,
+        1.396709680557251,
+        0.7838447093963623,
+        1.2833561897277832,
+        1.3457403182983398,
+        0.7195396423339844,
+        1.3818364143371582,
+        0.7316136360168457,
+        1.3515808582305908,
+        1.349766731262207,
+        1.3455991744995117,
+        1.3492491245269775,
+        1.4486279487609863,
+        1.3429274559020996,
+        1.3611042499542236,
+        1.3688604831695557,
+        1.3197064399719238,
+        1.3332350254058838,
+        1.3138856887817383,
+        0.8803365230560303,
+        1.4164280891418457,
+        1.3991971015930176,
+        1.333045482635498,
+        0.9101974964141846,
+        1.3184351921081543,
+        4.193720817565918,
+        4.148245573043823,
+        3.746774435043335,
+        4.329871892929077,
+        3.964728593826294,
+        3.781907796859741,
+        4.062279939651489,
+        3.9894635677337646,
+        3.490128517150879,
+        3.977710247039795,
+        3.915984869003296,
+        2.023221015930176,
+        1.936295747756958,
+        1.8978188037872314,
+        1.663818120956421,
+        2.3682701587677,
+        2.26521372795105,
+        2.315211534500122,
+        2.315211534500122,
+        2.1685757637023926,
+        2.307234287261963,
+        2.1860313415527344,
+        2.2266345024108887,
+        2.14837384223938
+      ],
+      "alienvault_otx": [
+        1.0571568012237549,
+        2.5754871368408203,
+        0.5830323696136475,
+        9.764568090438843,
+        1.366410255432129,
+        1.9001116752624512,
+        0.7160625457763672,
+        0.7105071544647217,
+        0.6693582534790039,
+        0.549893856048584,
+        1.290677547454834,
+        0.6027102470397949,
+        0.5497772693634033,
+        0.5637528896331787,
+        0.5504939556121826,
+        0.6147422790527344,
+        3.493269920349121,
+        13.127131223678589,
+        3.2099649906158447,
+        3.4226460456848145,
+        3.5693516731262207,
+        3.0621933937072754,
+        8.706721067428589,
+        3.0581002235412598,
+        3.1643459796905518,
+        3.3252289295196533,
+        3.1532416343688965,
+        10.047799348831177,
+        1.3809199333190918,
+        1.098531723022461,
+        1.9005212783813477,
+        1.450070858001709,
+        2.321533203125,
+        1.7614126205444336,
+        1.836298942565918,
+        1.3201851844787598
+      ],
+      "urlhaus": [
+        0.9662408828735352,
+        1.0483801364898682,
+        0.9103212356567383,
+        0.8840491771697998,
+        0.9022102355957031,
+        1.712311029434204,
+        1.6993443965911865,
+        1.6471097469329834,
+        1.608231782913208
+      ],
+      "greynoise": [
+        1.4356415271759033,
+        1.4526996612548828,
+        1.434478521347046,
+        1.361201524734497,
+        1.3324930667877197,
+        4.309549331665039,
+        4.017967939376831,
+        3.498769521713257,
+        3.7767326831817627,
+        3.7129595279693604,
+        3.9986133575439453,
+        3.8325021266937256,
+        3.965017795562744,
+        3.9113008975982666,
+        3.67436146736145,
+        1.878608226776123,
+        1.732243537902832
+      ]
+    },
+    "tool_success_rates": {
+      "malwarebazaar": 0.981,
+      "virustotal": 0.672,
+      "threatfox": 0.979,
+      "alienvault_otx": 0.278,
+      "urlhaus": 1.0,
+      "greynoise": 0.059
+    }
+  },
+  "metadata": {
+    "version": "1.0.0",
+    "created": "2026-05-20T15:27:23.209616",
+    "last_updated": "2026-05-21T14:17:47.471666",
+    "total_investigations": 0,
+    "documentation_sources": [
+      "https://bazaar.abuse.ch/api/",
+      "https://threatfox.abuse.ch/api/",
+      "https://urlhaus.abuse.ch/api/",
+      "https://otx.alienvault.com/api",
+      "https://docs.greynoise.io/docs/using-the-greynoise-api"
+    ]
+  }
+}
