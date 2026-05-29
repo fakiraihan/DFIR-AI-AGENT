@@ -4,18 +4,19 @@
     "ollama": {
       "enabled": true,
       "base_url": "http://localhost:11434",
-      "model": "sec-foundation:8b-gpu"
+      "model": "sec-foundation:8b-gpu",
+      "api_key": ""
     },
     "gemini": {
       "enabled": false,
       "model": "gemini-2.5-flash",
-      "api_key": ""
+      "api_key": "<REPLACE_WITH_GEMINI_API_KEY>"
     },
     "openrouter": {
       "enabled": false,
       "base_url": "https://openrouter.ai/api/v1",
       "model": "google/gemini-2.5-flash",
-      "api_key": ""
+      "api_key": "<REPLACE_WITH_OPENROUTER_API_KEY>"
     }
   }
 }
