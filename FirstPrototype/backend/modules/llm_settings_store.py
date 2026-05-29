@@ -32,17 +32,21 @@ def _default_settings() -> Dict[str, Any]:
                 "enabled": True,
                 "base_url": env_settings.ollama_base_url,
                 "model": env_settings.ollama_model,
+                "num_ctx": env_settings.llm_num_ctx,
+                "num_predict": env_settings.llm_num_predict,
             },
             "gemini": {
                 "enabled": False,
                 "model": env_settings.gemini_model,
                 "api_key": "",
+                "max_output_tokens": env_settings.llm_max_output_tokens,
             },
             "openrouter": {
                 "enabled": False,
                 "base_url": env_settings.openrouter_base_url,
                 "model": env_settings.openrouter_model,
                 "api_key": "",
+                "max_tokens": env_settings.llm_openrouter_max_tokens,
             },
         },
     }

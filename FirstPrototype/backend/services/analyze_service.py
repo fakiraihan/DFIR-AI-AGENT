@@ -17,6 +17,7 @@ from services.storage_service import (
 ANOMALY_STATUS_KEYS = (
     "unknown_template",
     "unknown_template_ratio_exceeded",
+    "evtx_heuristic_boost",
     "evtx_sparse_fallback",
     "deeplog_topk_miss",
 )
@@ -120,12 +121,21 @@ async def run_quick_analysis(
         str(vocab_path),
         window_size=selected_profile["window_size"],
         step_size=settings.deeplog_step_size,
-        topk=settings.deeplog_topk,
+        topk=selected_profile.get("topk", settings.deeplog_topk),
         skip_unknown_windows=settings.deeplog_skip_unknown_windows,
         max_unknown_ratio=settings.deeplog_max_unknown_ratio,
         unknown_template_mode=settings.deeplog_unknown_template_mode,
         evtx_sparse_fallback_enabled=settings.deeplog_evtx_sparse_fallback_enabled,
         evtx_sparse_fallback_threshold=settings.deeplog_evtx_sparse_fallback_threshold,
+        template_similarity_enabled=settings.deeplog_template_similarity_enabled,
+        template_similarity_threshold=settings.deeplog_template_similarity_threshold,
+        decision_policy=settings.deeplog_decision_policy,
+        score_threshold=settings.deeplog_score_threshold,
+        medium_score_threshold=settings.deeplog_medium_score_threshold,
+        recall_floor=settings.deeplog_target_recall,
+        use_bos_context=selected_profile.get("use_bos_context", False),
+        bos_token=selected_profile.get("bos_token", "<BOS>"),
+        bos_count=selected_profile.get("bos_count"),
     )
 
     (
@@ -153,7 +163,13 @@ async def run_quick_analysis(
             "max_unknown_ratio": settings.deeplog_max_unknown_ratio,
             "model_profile": selected_profile["name"],
             "window_size": selected_profile["window_size"],
+            "topk": selected_profile.get("topk", settings.deeplog_topk),
+            "decision_policy": settings.deeplog_decision_policy,
+            "score_threshold": settings.deeplog_score_threshold,
+            "recall_floor": settings.deeplog_target_recall,
             "parser_template_strategy": selected_profile["template_strategy"],
+            "use_bos_context": selected_profile.get("use_bos_context", False),
+            "bos_count": selected_profile.get("bos_count"),
             "result_truncated": truncated,
         },
         "summary": {

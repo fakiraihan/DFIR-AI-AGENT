@@ -13,6 +13,9 @@ from services.llm_service import get_ready_provider_snapshot
 from services.orchestrator_service import run_investigation_pipeline
 
 
+PUBLIC_ERROR_MESSAGE = "Investigation failed. Check backend logs for details."
+
+
 router = APIRouter(prefix="/api", tags=["investigation"])
 
 
@@ -65,6 +68,41 @@ def _session_history_item(session_id: str, session: dict[str, Any]) -> dict[str,
             "anomalies": session.get("anomalies_count"),
         },
     }
+
+
+def _sanitize_public_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    cleaned = str(value).replace("\r", "").strip("\n")
+    if len(cleaned) > 1200:
+        return f"{cleaned[:1200]}..."
+    return cleaned
+
+
+def _public_activity_events(session: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return sanitized activity events safe for the frontend terminal."""
+    events = session.get("activity_events")
+    if not isinstance(events, list):
+        return []
+
+    public_events = []
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        public_events.append(
+            {
+                "sequence": event.get("sequence"),
+                "timestamp": event.get("timestamp"),
+                "stage": event.get("stage"),
+                "action": event.get("action"),
+                "level": event.get("level"),
+                "line": _sanitize_public_text(event.get("line")),
+                "message": _sanitize_public_text(event.get("message")),
+                "progress": event.get("progress"),
+            }
+        )
+
+    return public_events
 
 
 @router.get("/sessions")
@@ -134,16 +172,22 @@ async def start_investigation(session_id: str, background_tasks: BackgroundTasks
             provider_snapshot, provider_status = get_ready_provider_snapshot()
         except LLMProviderError as exc:
             raise HTTPException(
-                status_code=400, detail=f"Selected LLM provider is not ready: {exc}"
+                status_code=400,
+                detail=str(exc),
             ) from exc
 
         session["status"] = "processing"
         session["stage"] = "pending"
         session["progress"] = 0
         session["current_message"] = "Investigation akan segera dimulai..."
+        session["activity_events"] = []
+        session["error"] = None
         session["llm_provider"] = provider_snapshot.get("provider")
         session["llm_model"] = provider_snapshot.get("model")
         session["llm_provider_status"] = provider_status
+        session.pop("report", None)
+        session.pop("report_path", None)
+        session.pop("completion_time", None)
         session_store.set_session(session_id, session)
 
         background_tasks.add_task(run_investigation_pipeline, session_id)
@@ -156,8 +200,8 @@ async def start_investigation(session_id: str, background_tasks: BackgroundTasks
 
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=PUBLIC_ERROR_MESSAGE) from exc
 
 
 @router.get("/status/{session_id}")
@@ -172,8 +216,9 @@ async def get_investigation_status(session_id: str):
         "status": session.get("status", "pending"),
         "stage": session.get("stage", "pending"),
         "progress": session.get("progress", 0),
-        "current_message": session.get("current_message", ""),
-        "error": session.get("error"),
+        "current_message": _sanitize_public_text(session.get("current_message", "")) or "",
+        "activity_events": _public_activity_events(session),
+        "error": PUBLIC_ERROR_MESSAGE if session.get("error") else None,
         "last_update": session.get("last_update"),
         "file_name": session.get("file_name"),
         "summary": {

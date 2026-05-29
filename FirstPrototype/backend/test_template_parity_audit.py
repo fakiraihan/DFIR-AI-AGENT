@@ -41,6 +41,26 @@ class TemplateParityAuditTest(unittest.TestCase):
         self.assertEqual(runtime_template, expected)
         self.assertEqual(runtime_cluster, expected)
 
+    def test_windows_apt_evtx_runtime_uses_metadata_order(self):
+        parser = DrainParser.__new__(DrainParser)
+        parser.template_strategy = "windows_apt_evtx"
+
+        runtime_template, runtime_cluster = parser._build_evtx_template(
+            "Microsoft-Windows-Security-Auditing",
+            "4624",
+            "Microsoft-Windows-Security-Auditing EventID=4624",
+            channel="Security",
+            task="12544",
+            level="0",
+        )
+
+        expected = (
+            "EventID 4624 Provider Microsoft-Windows-Security-Auditing "
+            "Channel Security Task 12544 Level 0"
+        )
+        self.assertEqual(runtime_template, expected)
+        self.assertEqual(runtime_cluster, expected)
+
     def test_known_training_schemes_are_not_silent_equivalents(self):
         evtx_attack_template = self._evtx_attack_template(PROVIDER, EVENT_ID)
 

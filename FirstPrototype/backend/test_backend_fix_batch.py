@@ -8,11 +8,17 @@ import unittest
 from contextlib import redirect_stdout
 from datetime import datetime
 from pathlib import Path
+import sys
 from unittest.mock import patch
 
 import pandas as pd
 import torch
 from fastapi.testclient import TestClient
+
+
+BACKEND_DIR = Path(__file__).resolve().parent
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
 
 from main import (
     DATA_DIR,
@@ -211,6 +217,94 @@ class BackendFixBatchTest(unittest.TestCase):
         self.assertTrue(model_path.exists())
         self.assertTrue(vocab_path.exists())
 
+    def test_windows_loghub_profile_uses_trained_artifacts(self):
+        model_path = _resolve_config_path(settings.windows_loghub_deeplog_model_path)
+        vocab_path = _resolve_config_path(settings.windows_loghub_deeplog_vocab_path)
+
+        self.assertIn("output_windows_loghub_stratified_1gb", str(model_path))
+        self.assertIn("output_windows_loghub_stratified_1gb", str(vocab_path))
+        self.assertEqual(settings.windows_loghub_deeplog_window_size, 20)
+        self.assertEqual(
+            settings.windows_loghub_parser_template_strategy,
+            "windows_loghub_cbs",
+        )
+        self.assertTrue(model_path.exists())
+        self.assertTrue(vocab_path.exists())
+
+    def test_parse_with_profile_switches_to_windows_loghub_for_cbs_logs(self):
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".log", delete=False, encoding="utf-8"
+        ) as tmp:
+            tmp.write("2016-09-28 04:30:30, Info                  CBS    Starting TrustedInstaller initialization.\n")
+            tmp.write("2016-09-28 04:30:31, Info                  CBS    Ending TrustedInstaller initialization.\n")
+            tmp.write("2016-09-28 04:30:32, Info                  CSI    00000001 Processing component C:\\Windows\\winsxs\\amd64_demo\\demo.dll version 10.0.14393.0\n")
+            tmp.write("2016-09-28 04:30:33, Warning               CBS    Failed to internally open package. [HRESULT = 0x800f0805]\n")
+            tmp.write("2016-09-28 04:30:34, Info                  CBS    Session: 30802430_123456789 initialized by client WindowsUpdateAgent.\n")
+            tmp.write("2016-09-28 04:30:35, Error                 CBS    Store corruption detected at 2016/9/28:04:30:35.000\n")
+            log_path = tmp.name
+
+        try:
+            parsed_df, templates, profile = _parse_with_profile(log_path, settings, max_lines=50)
+            templates_text = "\n".join(parsed_df["event_template"].astype(str).tolist())
+
+            self.assertEqual(profile["name"], "windows_loghub")
+            self.assertEqual(
+                profile["template_strategy"],
+                settings.windows_loghub_parser_template_strategy,
+            )
+            self.assertEqual(profile["window_size"], 20)
+            self.assertGreaterEqual(len(parsed_df), 6)
+            self.assertGreaterEqual(len(templates), 1)
+            self.assertIn("CSI Info <NUM> Processing component <PATH> version <VERSION>", templates_text)
+            self.assertIn("CBS Warning Failed to internally open package. [HRESULT = <HEX>]", templates_text)
+            self.assertIn("CBS Error Store corruption detected at <TIME>", templates_text)
+        finally:
+            Path(log_path).unlink(missing_ok=True)
+
+    def test_parse_with_profile_falls_back_when_windows_loghub_parse_is_empty(self):
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".log", delete=False, encoding="utf-8"
+        ) as tmp:
+            for idx in range(6):
+                tmp.write(
+                    f"2016-09-28 04:30:3{idx}, Info                  CBS    Sample event {idx}.\n"
+                )
+            log_path = tmp.name
+
+        empty_windows_parse = pd.DataFrame(columns=["raw_line", "event_template"])
+        general_parse = pd.DataFrame(
+            [{"raw_line": "fallback event", "event_template": "fallback event"}]
+        )
+
+        try:
+            with patch(
+                "modules.parsing.parse_log_file",
+                side_effect=[
+                    (empty_windows_parse, []),
+                    (general_parse, ["fallback-template"]),
+                ],
+            ) as mock_parse:
+                parsed_df, templates, profile = _parse_with_profile(
+                    log_path,
+                    settings,
+                    max_lines=50,
+                )
+
+            self.assertEqual(profile["name"], "general")
+            self.assertEqual(parsed_df.iloc[0]["event_template"], "fallback event")
+            self.assertEqual(templates, ["fallback-template"])
+            self.assertEqual(mock_parse.call_count, 2)
+            self.assertEqual(
+                mock_parse.call_args_list[0].kwargs["template_strategy"],
+                settings.windows_loghub_parser_template_strategy,
+            )
+            self.assertEqual(
+                mock_parse.call_args_list[1].kwargs["template_strategy"],
+                settings.parser_template_strategy,
+            )
+        finally:
+            Path(log_path).unlink(missing_ok=True)
+
     def test_parse_with_profile_switches_to_sysmon_for_evtx_rows(self):
         first_parse = pd.DataFrame(
             [
@@ -235,8 +329,59 @@ class BackendFixBatchTest(unittest.TestCase):
 
         self.assertEqual(profile["name"], "sysmon")
         self.assertEqual(profile["template_strategy"], settings.sysmon_parser_template_strategy)
-        self.assertEqual(parsed_df.iloc[0]["event_template"], "Microsoft-Windows-Sysmon EventID=1")
-        self.assertEqual(templates, ["sysmon-template"])
+        self.assertEqual(profile["template_enrichment"], "lmd_sysmon_v1")
+        self.assertEqual(
+            parsed_df.iloc[0]["OriginalEventTemplate"],
+            "Microsoft-Windows-Sysmon EventID=1",
+        )
+        self.assertIn("Microsoft-Windows-Sysmon EventID=1", parsed_df.iloc[0]["event_template"])
+        self.assertIn("ImageClass=unknown", parsed_df.iloc[0]["event_template"])
+        self.assertIn("ImageClass=unknown", templates[0]["template"])
+        self.assertEqual(mock_parse.call_count, 2)
+
+    def test_parse_with_profile_switches_non_sysmon_evtx_to_windows_apt(self):
+        first_parse = pd.DataFrame(
+            [
+                {
+                    "raw_line": "Microsoft-Windows-Security-Auditing EventID=4624",
+                    "event_template": "tmp1",
+                },
+                {
+                    "raw_line": "Microsoft-Windows-Security-Auditing EventID=4672",
+                    "event_template": "tmp2",
+                },
+            ]
+        )
+        windows_apt_parse = pd.DataFrame(
+            [
+                {
+                    "raw_line": "Microsoft-Windows-Security-Auditing EventID=4624",
+                    "event_template": (
+                        "EventID 4624 Provider Microsoft-Windows-Security-Auditing "
+                        "Channel Security Task 12544 Level 0"
+                    ),
+                }
+            ]
+        )
+
+        with patch.object(settings, "evtx_general_deeplog_profile", "windows_apt"), patch(
+            "modules.parsing.parse_log_file",
+            side_effect=[
+                (first_parse, ["general-template"]),
+                (windows_apt_parse, ["windows-apt-template"]),
+            ],
+        ) as mock_parse:
+            parsed_df, templates, profile = _parse_with_profile(
+                "security.evtx",
+                settings,
+                max_lines=10,
+            )
+
+        self.assertEqual(profile["name"], "windows_apt")
+        self.assertEqual(profile["template_strategy"], settings.windows_apt_parser_template_strategy)
+        self.assertEqual(profile["topk"], settings.windows_apt_deeplog_topk)
+        self.assertIn("EventID 4624 Provider", parsed_df.iloc[0]["event_template"])
+        self.assertEqual(templates, ["windows-apt-template"])
         self.assertEqual(mock_parse.call_count, 2)
 
     def test_gate_observation_logging_records_retained_and_dropped_windows(self):

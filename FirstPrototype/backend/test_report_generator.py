@@ -783,6 +783,33 @@ class ReportGeneratorTest(unittest.TestCase):
         self.assertIn("sample.evtx", report["executive_summary"])
         self.assertIn("3 window anomali", report["executive_summary"])
 
+    def test_preserves_evidence_based_long_summary_with_report_headings(self):
+        state = self._build_state()
+        state["investigation_summary"] = (
+            "### 1. RINGKASAN EKSEKUTIF\n"
+            "Incident Overview: Investigasi terhadap sample.evtx menemukan window 3 "
+            "dengan Microsoft-Windows-Sysmon EventID=1 dan indikator 1.0.0.0. "
+            "Temuan ini perlu ditriase karena berkaitan dengan proses yang diamati "
+            "pada timeline investigasi.\n\n"
+            "Threat Identification: Evidence yang tersedia belum cukup untuk "
+            "menyatakan kompromi final, tetapi IOC 1.0.0.0 tetap diprioritaskan "
+            "untuk korelasi tambahan.\n\n"
+            "Impact Assessment: Dampak operasional belum terkonfirmasi sehingga "
+            "verdict harus dibatasi pada evidence window dan enrichment yang ada.\n\n"
+            "Recommended Actions: lakukan containment berbasis risiko, korelasikan "
+            "dengan EDR/SIEM, dan validasi host terkait sebelum eskalasi."
+        )
+
+        report = self.generator.generate_report(
+            session_id="test-session",
+            file_name="sample.evtx",
+            investigation_state=state,
+        )
+
+        self.assertIn("Incident Overview", report["executive_summary"])
+        self.assertIn("Threat Identification", report["executive_summary"])
+        self.assertIn("1.0.0.0", report["executive_summary"])
+
     def test_sanitizes_tool_errors_and_filters_noisy_iocs(self):
         report = self.generator.generate_report(
             session_id="test-session",

@@ -1,7 +1,6 @@
 import json
 import pickle
 
-import numpy as np
 from numpy import dot
 from numpy.linalg import norm
 
@@ -15,21 +14,26 @@ def read_json(filename):
 class Vocab(object):
     def __init__(self, logs, emb_file="embeddings.json", embedding_dim=100):
         self.stoi = {}
-        self.itos = ["padding"]
         self.pad_token = "padding"
+        self.unk_token = "<UNK>"
+        self.itos = [self.pad_token]
 
         for line in logs:
             self.itos.extend(line)
         self.mask_index = 4
-        self.itos = ["padding"] + list(set(self.itos))
-        self.unk_index = len(self.itos)
+        unique_events = list(dict.fromkeys(self.itos))
+        if self.unk_token not in unique_events:
+            unique_events.append(self.unk_token)
+        self.itos = unique_events
         self.stoi = {e: i for i, e in enumerate(self.itos)}
+        self.unk_index = self.stoi[self.unk_token]
         self.semantic_vectors = read_json(emb_file)
         self.semantic_vectors = {
             k: v if type(v) is list else [0] * embedding_dim
             for k, v in self.semantic_vectors.items()
         }
         self.semantic_vectors[self.pad_token] = [-1] * embedding_dim
+        self.semantic_vectors[self.unk_token] = [0] * embedding_dim
         self.mapping = {}
 
     def __len__(self):

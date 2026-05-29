@@ -1,4 +1,3 @@
-import React from 'react'
 import { AppBar, Toolbar, IconButton, Typography, Box, Chip, Stack, Slide } from '@mui/material'
 import MenuIcon from '@mui/icons-material/Menu'
 import VerifiedRoundedIcon from '@mui/icons-material/VerifiedRounded'

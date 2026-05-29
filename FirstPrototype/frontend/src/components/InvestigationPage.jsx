@@ -2,7 +2,6 @@ import React, { useState, useEffect, Suspense, lazy, useRef } from 'react'
 import axios from 'axios'
 const MarkdownRenderer = lazy(() => import('./MarkdownRenderer'))
 const PDFExportTemplate = lazy(() => import('./PDFExportTemplate'))
-import ThinkingIndicator from './ThinkingIndicator'
 import { 
   Box, Typography, Paper, Button, Alert, CircularProgress, 
   Chip, Stack, Grid, LinearProgress, Divider, Menu, MenuItem, ListItemIcon,
@@ -10,14 +9,9 @@ import {
 } from '@mui/material'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline'
-import AssessmentIcon from '@mui/icons-material/Assessment'
-import PolicyIcon from '@mui/icons-material/Policy'
-import AnalyticsIcon from '@mui/icons-material/Analytics'
 import TimelineIcon from '@mui/icons-material/Timeline'
 import AddBoxIcon from '@mui/icons-material/AddBox'
 import ShieldOutlinedIcon from '@mui/icons-material/ShieldOutlined'
-import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded'
-import TravelExploreRoundedIcon from '@mui/icons-material/TravelExploreRounded'
 import ArrowOutwardRoundedIcon from '@mui/icons-material/ArrowOutwardRounded'
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf'
 import DescriptionIcon from '@mui/icons-material/Description'
@@ -102,6 +96,42 @@ const getProgressValue = (value) => {
   return Math.min(100, Math.max(0, numericValue))
 }
 
+const formatAgentEventTime = (value) => {
+  const parsedDate = new Date(value)
+  if (Number.isNaN(parsedDate.getTime())) return '--:--:--'
+
+  return parsedDate.toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  })
+}
+
+const getAgentStageLabel = (stage) => {
+  const labels = {
+    pending: 'QUEUE',
+    parsing: 'PARSER',
+    anomaly_detection: 'DEEPLOG',
+    ai_agent: 'AGENT',
+    report_generation: 'REPORT',
+    completed: 'DONE',
+  }
+
+  return labels[stage] || String(stage || 'SYSTEM').replace(/_/g, ' ').toUpperCase()
+}
+
+const getAgentEventLine = (event) => event?.line || event?.message || 'Agent activity update received.'
+
+const getAgentEventColor = (level) => {
+  if (level === 'success') return '#86efac'
+  if (level === 'warning') return '#fbbf24'
+  if (level === 'error') return '#fb7185'
+  if (level === 'stage') return '#67e8f9'
+  if (level === 'status') return '#c4b5fd'
+  return '#CBD5E1'
+}
+
 const TabPanel = (props) => {
   const { children, value, index, ...other } = props
   return (
@@ -176,6 +206,9 @@ const InvestigationPage = ({ sessionId, onBackToUpload, onSessionMissing }) => {
     { label: 'Anomalies', value: status?.summary?.anomalies ?? status?.summary?.anomaly_count ?? 'N/A' },
     { label: 'IOCs', value: report?.ioc_analysis?.length ?? 'N/A' }
   ];
+  const activityEvents = Array.isArray(status?.activity_events) ? status.activity_events : []
+  const latestAgentEvent = activityEvents[activityEvents.length - 1]
+  const shouldShowAgentTerminal = Boolean(status && status.status !== 'completed' && !report)
 
   useEffect(() => {
     let timeoutId = null
@@ -456,9 +489,136 @@ const InvestigationPage = ({ sessionId, onBackToUpload, onSessionMissing }) => {
           </Stepper>
           
           <Box sx={{ mt: 3, p: 2, bgcolor: 'rgba(255,255,255,0.02)', borderRadius: 2, border: '1px solid rgba(255,255,255,0.05)' }}>
-             <Typography variant="caption" color="text.secondary" display="block" sx={{ textTransform: 'uppercase', letterSpacing: '0.05em', mb: 0.5 }}>Current Message</Typography>
-             <Typography variant="body2" sx={{ color: '#F8FAFC', fontWeight: 500 }}>{status.current_message || 'Processing...'}</Typography>
+              <Typography variant="caption" color="text.secondary" display="block" sx={{ textTransform: 'uppercase', letterSpacing: '0.05em', mb: 0.5 }}>Current Message</Typography>
+              <Typography variant="body2" sx={{ color: '#F8FAFC', fontWeight: 500 }}>{status.current_message || 'Processing...'}</Typography>
           </Box>
+
+          {shouldShowAgentTerminal && (
+          <Paper
+            elevation={0}
+            sx={{
+              mt: 3,
+              overflow: 'hidden',
+              borderRadius: 3,
+              border: '1px solid rgba(34, 211, 238, 0.18)',
+              bgcolor: 'rgba(2, 6, 23, 0.86)',
+              boxShadow: '0 22px 60px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255,255,255,0.04)',
+              position: 'relative',
+              '&::before': {
+                content: '""',
+                position: 'absolute',
+                inset: 0,
+                pointerEvents: 'none',
+                backgroundImage: 'linear-gradient(rgba(34, 211, 238, 0.035) 1px, transparent 1px)',
+                backgroundSize: '100% 11px',
+                opacity: 0.55,
+              },
+              '&::after': {
+                content: '""',
+                position: 'absolute',
+                inset: 0,
+                pointerEvents: 'none',
+                background: 'radial-gradient(circle at 14% 0%, rgba(34,211,238,0.18), transparent 32%), radial-gradient(circle at 90% 15%, rgba(16,185,129,0.12), transparent 28%)',
+              },
+            }}
+          >
+            <Box sx={{ position: 'relative', zIndex: 1 }}>
+              <Box
+                sx={{
+                  px: 2.5,
+                  py: 1.4,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 2,
+                  borderBottom: '1px solid rgba(34, 211, 238, 0.12)',
+                  bgcolor: 'rgba(15, 23, 42, 0.72)',
+                }}
+              >
+                <Stack direction="row" spacing={1.2} alignItems="center">
+                  <Stack direction="row" spacing={0.7}>
+                    <Box sx={{ width: 9, height: 9, borderRadius: '50%', bgcolor: '#fb7185', boxShadow: '0 0 10px rgba(251,113,133,0.55)' }} />
+                    <Box sx={{ width: 9, height: 9, borderRadius: '50%', bgcolor: '#f59e0b', boxShadow: '0 0 10px rgba(245,158,11,0.45)' }} />
+                    <Box sx={{ width: 9, height: 9, borderRadius: '50%', bgcolor: '#22c55e', boxShadow: '0 0 10px rgba(34,197,94,0.45)' }} />
+                  </Stack>
+                  <Typography sx={{ color: '#67e8f9', fontFamily: 'monospace', fontWeight: 800, letterSpacing: '0.12em', fontSize: '0.78rem' }}>
+                    AGENT_TERMINAL
+                  </Typography>
+                </Stack>
+                <Chip
+                  size="small"
+                  label={status.status === 'completed' ? 'SESSION CLOSED' : 'LIVE TRACE'}
+                  sx={{
+                    height: 22,
+                    color: status.status === 'completed' ? '#86efac' : '#67e8f9',
+                    border: '1px solid rgba(103,232,249,0.28)',
+                    bgcolor: 'rgba(8, 47, 73, 0.42)',
+                    fontFamily: 'monospace',
+                    fontWeight: 700,
+                    letterSpacing: '0.08em',
+                  }}
+                />
+              </Box>
+
+              <Box sx={{ p: { xs: 2, md: 2.5 } }}>
+                <Box sx={{ mb: 2.2, display: 'flex', alignItems: 'center', gap: 1.2, flexWrap: 'wrap' }}>
+                  <Typography sx={{ color: '#22d3ee', fontFamily: 'monospace', fontWeight: 800 }}>$</Typography>
+                  <Typography sx={{ color: '#E2E8F0', fontFamily: 'monospace', fontSize: '0.88rem' }}>
+                    run dfir-agent --session {sessionId} --observe
+                  </Typography>
+                  {latestAgentEvent && (
+                    <Chip
+                      size="small"
+                      label={`${Math.round(getProgressValue(latestAgentEvent.progress))}%`}
+                      sx={{ height: 22, color: '#0f172a', bgcolor: '#67e8f9', fontFamily: 'monospace', fontWeight: 900 }}
+                    />
+                  )}
+                </Box>
+
+                <Box
+                  key={latestAgentEvent?.sequence || latestAgentEvent?.timestamp || 'waiting'}
+                  sx={{
+                    minHeight: 64,
+                    display: 'flex',
+                    alignItems: 'center',
+                    px: 1.35,
+                    py: 1.2,
+                    borderRadius: 2,
+                    bgcolor: 'rgba(34, 211, 238, 0.08)',
+                    border: '1px solid rgba(34, 211, 238, 0.2)',
+                    boxShadow: '0 0 28px rgba(34,211,238,0.09)',
+                    animation: 'agentLineFade 1.5s ease-in-out both',
+                    '@keyframes agentLineFade': {
+                      '0%': { opacity: 0, transform: 'translateY(6px)', filter: 'blur(2px)' },
+                      '18%': { opacity: 1, transform: 'translateY(0)', filter: 'blur(0)' },
+                      '78%': { opacity: 1, transform: 'translateY(0)', filter: 'blur(0)' },
+                      '100%': { opacity: 0.58, transform: 'translateY(-2px)', filter: 'blur(0)' },
+                    },
+                  }}
+                >
+                  {latestAgentEvent ? (
+                    <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '84px 96px 1fr' }, gap: { xs: 0.35, md: 1.25 }, alignItems: 'start', width: '100%' }}>
+                      <Typography sx={{ color: '#64748b', fontFamily: 'monospace', fontSize: '0.76rem' }}>
+                        {formatAgentEventTime(latestAgentEvent.timestamp)}
+                      </Typography>
+                      <Typography sx={{ color: '#67e8f9', fontFamily: 'monospace', fontWeight: 900, fontSize: '0.74rem', letterSpacing: '0.08em' }}>
+                        [{getAgentStageLabel(latestAgentEvent.stage)}]
+                      </Typography>
+                      <Typography noWrap sx={{ color: getAgentEventColor(latestAgentEvent.level), fontFamily: 'monospace', fontSize: '0.82rem', lineHeight: 1.55 }}>
+                        <Box component="span" sx={{ color: '#34d399', mr: 1 }}>›</Box>
+                        {getAgentEventLine(latestAgentEvent).replace(/\s+/g, ' ')}
+                      </Typography>
+                    </Box>
+                  ) : (
+                    <Typography sx={{ color: '#94A3B8', fontFamily: 'monospace', fontSize: '0.85rem' }}>
+                      › Waiting for agent telemetry stream...
+                    </Typography>
+                  )}
+                </Box>
+              </Box>
+            </Box>
+          </Paper>
+          )}
         </Paper>
       )}
 

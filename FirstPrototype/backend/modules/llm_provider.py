@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import time
+from importlib import import_module
 from typing import Any, Dict
 from urllib import error, parse, request
 
-from langchain_community.llms import Ollama
+
+API_CLIENT_USER_AGENT = "FirstPrototype-DFIR/1.0"
 
 
 class LLMProviderError(RuntimeError):
@@ -15,10 +17,17 @@ class LLMProviderError(RuntimeError):
 
 
 class GeminiRuntimeClient:
-    def __init__(self, model: str, api_key: str, temperature: float = 0.4):
+    def __init__(
+        self,
+        model: str,
+        api_key: str,
+        temperature: float = 0.4,
+        max_output_tokens: int = 8192,
+    ):
         self.model = model
         self.api_key = api_key
         self.temperature = temperature
+        self.max_output_tokens = max_output_tokens
 
     def invoke(self, prompt: str) -> str:
         url = (
@@ -27,7 +36,10 @@ class GeminiRuntimeClient:
         )
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"temperature": self.temperature},
+            "generationConfig": {
+                "temperature": self.temperature,
+                "maxOutputTokens": self.max_output_tokens,
+            },
         }
         data = _json_request(url, method="POST", body=payload)
         candidates = data.get("candidates", [])
@@ -40,12 +52,18 @@ class GeminiRuntimeClient:
 
 class OpenRouterRuntimeClient:
     def __init__(
-        self, base_url: str, model: str, api_key: str, temperature: float = 0.4
+        self,
+        base_url: str,
+        model: str,
+        api_key: str,
+        temperature: float = 0.4,
+        max_tokens: int = 65536,
     ):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key
         self.temperature = temperature
+        self.max_tokens = max_tokens
 
     def invoke(self, prompt: str) -> str:
         url = f"{self.base_url}/chat/completions"
@@ -53,6 +71,7 @@ class OpenRouterRuntimeClient:
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
         }
         data = _json_request(
             url,
@@ -73,7 +92,11 @@ def _json_request(
     body: Dict[str, Any] | None = None,
     headers: Dict[str, str] | None = None,
 ) -> Dict[str, Any]:
-    request_headers = {"Content-Type": "application/json"}
+    request_headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": API_CLIENT_USER_AGENT,
+    }
     if headers:
         request_headers.update(headers)
 
@@ -85,12 +108,54 @@ def _json_request(
     try:
         with request.urlopen(req, timeout=10) as response:
             raw = response.read().decode("utf-8")
-            return json.loads(raw) if raw else {}
+            try:
+                return json.loads(raw) if raw else {}
+            except json.JSONDecodeError as exc:
+                raise LLMProviderError(
+                    f"Invalid JSON response from {url}"
+                ) from exc
     except error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="ignore")
         raise LLMProviderError(f"HTTP {exc.code}: {detail or exc.reason}") from exc
     except error.URLError as exc:
         raise LLMProviderError(str(exc.reason)) from exc
+    except OSError as exc:
+        raise LLMProviderError(str(exc)) from exc
+
+
+def _ollama_model_aliases(model: str) -> set[str]:
+    model_name = model.strip()
+    aliases = {model_name}
+    if ":" not in model_name:
+        aliases.add(f"{model_name}:latest")
+    elif model_name.endswith(":latest"):
+        aliases.add(model_name.removesuffix(":latest"))
+    return aliases
+
+
+def _extract_ollama_model_names(data: Dict[str, Any]) -> set[str]:
+    model_names: set[str] = set()
+    for item in data.get("models", []):
+        if not isinstance(item, dict):
+            continue
+        for key in ("name", "model"):
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                model_names.add(value.strip())
+    return model_names
+
+
+def _unavailable_provider_status(
+    provider_name: str, provider_settings: Dict[str, Any], exc: Exception
+) -> Dict[str, Any]:
+    return {
+        "provider": provider_name,
+        "configured": True,
+        "ok": False,
+        "latency_ms": None,
+        "error": str(exc) or "Provider health check failed",
+        "model": provider_settings.get("model"),
+    }
 
 
 def build_llm_client(provider_settings: Dict[str, Any], role: str = "agent") -> Any:
@@ -101,16 +166,26 @@ def build_llm_client(provider_settings: Dict[str, Any], role: str = "agent") -> 
         raise LLMProviderError(f"Model is required for provider '{provider}'")
 
     if provider == "ollama":
+        try:
+            ollama_module = import_module("langchain_community.llms")
+            ollama_client = getattr(ollama_module, "Ollama")
+        except (ImportError, AttributeError) as exc:
+            raise LLMProviderError(
+                "Ollama LangChain integration is not available"
+            ) from exc
+
         base_url = provider_settings.get("base_url", "http://localhost:11434")
         temperature = 0.1
-        return Ollama(
+        num_ctx = int(provider_settings.get("num_ctx") or 16384)
+        num_predict = int(provider_settings.get("num_predict") or 8192)
+        return ollama_client(
             base_url=base_url,
             model=model,
             temperature=temperature,
             top_p=0.7,
             top_k=20,
-            num_ctx=4096,
-            num_predict=2048,
+            num_ctx=num_ctx,
+            num_predict=num_predict,
             repeat_penalty=1.15,
         )
 
@@ -118,8 +193,12 @@ def build_llm_client(provider_settings: Dict[str, Any], role: str = "agent") -> 
         api_key = provider_settings.get("api_key", "")
         if not api_key:
             raise LLMProviderError("Gemini API key is not configured")
+        max_output_tokens = int(provider_settings.get("max_output_tokens") or 8192)
         return GeminiRuntimeClient(
-            model=model, api_key=api_key, temperature=0.2 if role == "filter" else 0.4
+            model=model,
+            api_key=api_key,
+            temperature=0.2 if role == "filter" else 0.4,
+            max_output_tokens=max_output_tokens,
         )
 
     if provider == "openrouter":
@@ -127,11 +206,13 @@ def build_llm_client(provider_settings: Dict[str, Any], role: str = "agent") -> 
         if not api_key:
             raise LLMProviderError("OpenRouter API key is not configured")
         base_url = provider_settings.get("base_url", "https://openrouter.ai/api/v1")
+        max_tokens = int(provider_settings.get("max_tokens") or 65536)
         return OpenRouterRuntimeClient(
             base_url=base_url,
             model=model,
             api_key=api_key,
             temperature=0.2 if role == "filter" else 0.4,
+            max_tokens=max_tokens,
         )
 
     raise LLMProviderError(f"Unsupported provider '{provider}'")
@@ -155,15 +236,20 @@ def check_provider_health(
             base_url = provider_settings.get(
                 "base_url", "http://localhost:11434"
             ).rstrip("/")
-            model = provider_settings.get("model")
+            model = str(provider_settings.get("model") or "").strip()
             if not model:
                 raise LLMProviderError("Ollama model is not configured")
             data = _json_request(f"{base_url}/api/tags")
-            models = {item.get("name") for item in data.get("models", [])}
+            models = _extract_ollama_model_names(data)
             status["reachable"] = True
-            status["model_available"] = model in models
+            status["available_models"] = sorted(models)
+            status["model_available"] = bool(_ollama_model_aliases(model) & models)
             if not status["model_available"]:
-                raise LLMProviderError(f"Model '{model}' is not available in Ollama")
+                available = ", ".join(sorted(models)) or "none"
+                raise LLMProviderError(
+                    f"Model '{model}' is not available in Ollama. "
+                    f"Available models: {available}"
+                )
 
         elif provider_name == "gemini":
             api_key = provider_settings.get("api_key", "")
@@ -223,9 +309,14 @@ def get_all_provider_health(effective_settings: Dict[str, Any]) -> Dict[str, Any
     for provider_name, provider_settings in providers.items():
         provider_snapshot = dict(provider_settings)
         provider_snapshot["provider"] = provider_name
-        statuses[provider_name] = check_provider_health(
-            provider_name, provider_snapshot
-        )
+        try:
+            statuses[provider_name] = check_provider_health(
+                provider_name, provider_snapshot
+            )
+        except Exception as exc:
+            statuses[provider_name] = _unavailable_provider_status(
+                provider_name, provider_snapshot, exc
+            )
     return statuses
 
 

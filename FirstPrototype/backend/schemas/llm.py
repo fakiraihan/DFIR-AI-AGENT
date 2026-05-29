@@ -8,6 +8,10 @@ class ProviderSettingsPayload(BaseModel):
     base_url: str | None = None
     model: str | None = None
     api_key: str | None = None
+    num_ctx: int | None = None
+    num_predict: int | None = None
+    max_tokens: int | None = None
+    max_output_tokens: int | None = None
     clear_api_key: bool = False
 
 

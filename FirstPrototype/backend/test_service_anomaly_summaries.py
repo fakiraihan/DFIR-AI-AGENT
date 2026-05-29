@@ -40,6 +40,7 @@ class ServiceAnomalySummaryTest(unittest.TestCase):
             {
                 "unknown_template": 1,
                 "unknown_template_ratio_exceeded": 1,
+                "evtx_heuristic_boost": 0,
                 "evtx_sparse_fallback": 1,
                 "deeplog_topk_miss": 1,
             },
@@ -63,6 +64,7 @@ class ServiceAnomalySummaryTest(unittest.TestCase):
             {
                 "unknown_template": 2,
                 "unknown_template_ratio_exceeded": 0,
+                "evtx_heuristic_boost": 0,
                 "evtx_sparse_fallback": 1,
                 "deeplog_topk_miss": 1,
             },

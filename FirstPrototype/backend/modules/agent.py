@@ -3,67 +3,26 @@ LangGraph AI Agent for DFIR Investigation
 Orchestrates investigation using ReAct pattern with Foundation-Sec-8B
 """
 
-from typing import Dict, List, Any, TypedDict, Annotated, Optional, Mapping
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import operator
-import json
-import re
+from typing import Dict, List, Any, Optional, Mapping
 import time
-from ipaddress import ip_address
-from pathlib import Path
-from urllib.parse import urlparse
 import pandas as pd
 
 from langgraph.graph import StateGraph, END
 
+from modules.agent_modules import constants as agent_constants
+from modules.agent_modules import evidence as agent_evidence
+from modules.agent_modules import execution as agent_execution
+from modules.agent_modules import ioc as agent_ioc
+from modules.agent_modules import prompts as agent_prompts
+from modules.agent_modules import recommendations as agent_recommendations
+from modules.agent_modules import reporting as agent_reporting
+from modules.agent_modules import routing as agent_routing
+from modules.agent_modules import selection as agent_selection
+from modules.agent_modules.state import InvestigationState, build_initial_state
+from modules.agent_modules import timeline as agent_timeline
+from modules.agent_modules import tooling as agent_tooling
 from modules.procedural_memory import ProceduralMemory
 from modules.threat_intel import ThreatIntelToolkit
-
-
-class InvestigationState(TypedDict):
-    """State for investigation graph"""
-
-    # Input
-    anomalies: List[Dict[str, Any]]  # Anomalies from DeepLog
-    parsed_logs: pd.DataFrame  # Full parsed logs
-
-    # Episodic Memory
-    iocs_extracted: List[Dict[str, Any]]  # Extracted IOCs
-    tool_calls: Annotated[List[Dict[str, Any]], operator.add]  # Tool call history
-    tool_results: Annotated[List[Dict[str, Any]], operator.add]  # Tool results
-    reasoning_steps: Annotated[List[str], operator.add]  # Reasoning history
-    planning_steps: Annotated[List[str], operator.add]  # Planning/decomposition history
-    planned_tool_calls: Annotated[List[Dict[str, Any]], operator.add]
-    planning_completed: bool
-    planning_round: int
-    max_planning_rounds: int
-    reflection_steps: Annotated[List[str], operator.add]
-    post_correlation_follow_up_calls: Annotated[List[Dict[str, Any]], operator.add]
-    observation_assessment: str
-    reflection_round: int
-    max_reflection_rounds: int
-    correlation_analysis: str  # Correlation analysis from LLM
-    normalized_evidence: Annotated[List[Dict[str, Any]], operator.add]
-    aggregated_ioc_evidence: Dict[str, Dict[str, Any]]
-    tool_selection_trace: Annotated[List[Dict[str, Any]], operator.add]
-    tool_validation_trace: Annotated[List[Dict[str, Any]], operator.add]
-    agent_trace: Annotated[List[Dict[str, Any]], operator.add]
-    investigation_status: str
-    investigation_confidence: float
-    confidence_factors: List[str]
-    supporting_evidence: List[Dict[str, Any]]
-    inconclusive_reason: str
-
-    # Output
-    investigation_summary: str
-    attack_timeline: List[Dict[str, Any]]
-    recommendations: List[str]
-
-    # Control
-    current_stage: str
-    completed: bool
-    tool_execution_round: int
-    max_tool_execution_rounds: int
 
 
 class DFIRAgent:
@@ -72,80 +31,16 @@ class DFIRAgent:
     Uses ReAct pattern: Reasoning -> Action -> Observation
     """
 
-    IOC_TYPES = {"ip", "domain", "url", "md5", "sha256"}
-    EXECUTABLE_FILE_EXTENSIONS = {
-        ".exe",
-        ".dll",
-        ".tmp",
-        ".sys",
-        ".dat",
-        ".bat",
-        ".cmd",
-        ".ps1",
-        ".vbs",
-        ".js",
-        ".jar",
-        ".msi",
-        ".lnk",
-    }
-    TOOL_TO_IOC_TYPES = {
-        "threatfox_lookup": {"ip", "domain", "url", "md5", "sha256"},
-        "malwarebazaar_lookup": {"md5", "sha256"},
-        "urlhaus_lookup": {"url"},
-        "alienvault_otx_lookup": {"ip", "domain", "url", "md5", "sha256"},
-        "greynoise_lookup": {"ip"},
-        "virustotal_lookup": {"ip", "domain", "url", "md5", "sha256"},
-    }
-    TOOL_RESULT_ALIASES = {
-        "threatfox": "threatfox_lookup",
-        "malwarebazaar": "malwarebazaar_lookup",
-        "urlhaus": "urlhaus_lookup",
-        "otx": "alienvault_otx_lookup",
-        "alienvault_otx": "alienvault_otx_lookup",
-        "greynoise": "greynoise_lookup",
-        "virustotal": "virustotal_lookup",
-    }
-    MEMORY_TOOL_TO_AGENT_TOOL = {
-        "threatfox": "threatfox_lookup",
-        "malwarebazaar": "malwarebazaar_lookup",
-        "urlhaus": "urlhaus_lookup",
-        "alienvault_otx": "alienvault_otx_lookup",
-        "greynoise": "greynoise_lookup",
-        "virustotal": "virustotal_lookup",
-    }
-    AGENT_TOOL_TO_MEMORY_TOOL = {
-        "threatfox_lookup": "threatfox",
-        "malwarebazaar_lookup": "malwarebazaar",
-        "urlhaus_lookup": "urlhaus",
-        "alienvault_otx_lookup": "alienvault_otx",
-        "greynoise_lookup": "greynoise",
-        "virustotal_lookup": "virustotal",
-    }
-    IOC_TYPE_TO_MEMORY_STRATEGY = {
-        "ip": "ip_address",
-        "md5": "file_hash",
-        "sha256": "file_hash",
-        "domain": "domain",
-        "url": "url",
-    }
-    STATIC_FALLBACK_TOOLS = {
-        "ip": [
-            "greynoise_lookup",
-            "threatfox_lookup",
-            "alienvault_otx_lookup",
-            "virustotal_lookup",
-        ],
-        "domain": [
-            "threatfox_lookup",
-            "alienvault_otx_lookup",
-            "virustotal_lookup",
-        ],
-        "url": ["urlhaus_lookup", "threatfox_lookup", "virustotal_lookup"],
-        "md5": ["malwarebazaar_lookup", "virustotal_lookup", "threatfox_lookup"],
-        "sha256": ["malwarebazaar_lookup", "virustotal_lookup", "threatfox_lookup"],
-    }
-    DEFAULT_MAX_TOOL_EXECUTION_ROUNDS = 2
-    DEFAULT_MAX_REFLECTION_ROUNDS = 1
+    IOC_TYPES = agent_constants.IOC_TYPES
+    EXECUTABLE_FILE_EXTENSIONS = agent_constants.EXECUTABLE_FILE_EXTENSIONS
+    TOOL_TO_IOC_TYPES = agent_constants.TOOL_TO_IOC_TYPES
+    TOOL_RESULT_ALIASES = agent_constants.TOOL_RESULT_ALIASES
+    MEMORY_TOOL_TO_AGENT_TOOL = agent_constants.MEMORY_TOOL_TO_AGENT_TOOL
+    AGENT_TOOL_TO_MEMORY_TOOL = agent_constants.AGENT_TOOL_TO_MEMORY_TOOL
+    IOC_TYPE_TO_MEMORY_STRATEGY = agent_constants.IOC_TYPE_TO_MEMORY_STRATEGY
+    STATIC_FALLBACK_TOOLS = agent_constants.STATIC_FALLBACK_TOOLS
+    DEFAULT_MAX_TOOL_EXECUTION_ROUNDS = agent_constants.DEFAULT_MAX_TOOL_EXECUTION_ROUNDS
+    DEFAULT_MAX_REFLECTION_ROUNDS = agent_constants.DEFAULT_MAX_REFLECTION_ROUNDS
 
     def __init__(
         self,
@@ -181,8 +76,8 @@ class DFIRAgent:
                 temperature=0.1,
                 top_p=0.7,
                 top_k=20,
-                num_ctx=4096,
-                num_predict=2048,
+                num_ctx=16384,
+                num_predict=8192,
                 repeat_penalty=1.15,
             )
 
@@ -201,6 +96,7 @@ class DFIRAgent:
         # Status callback
         self.session_id = None
         self.status_callback = None
+        self.telemetry_callback = None
 
         # Build LangGraph
         self.graph = self._build_graph()
@@ -263,48 +159,21 @@ class DFIRAgent:
 
     def _route_after_ioc_extraction(self, state: InvestigationState) -> str:
         """Route directly to a safe context-only result when no valid IOC exists."""
-        if state.get("iocs_extracted"):
-            print("IOC extraction routing: has_iocs")
-            return "has_iocs"
-        print("IOC extraction routing: no_iocs")
-        return "no_iocs"
+        decision = agent_routing.route_after_ioc_extraction(state)
+        self._emit_terminal(f"IOC extraction routing: {decision}", progress=64)
+        return decision
 
     def _decide_next_step(self, state: InvestigationState) -> str:
         """Route the graph based on observations from the latest tool round."""
-        iocs = state.get("iocs_extracted") or []
-        if not iocs:
-            print("Routing decision: no_iocs (no extracted IOCs to enrich)")
-            return "no_iocs"
-
-        current_round = self._coerce_int(state.get("tool_execution_round"), 0)
-        max_rounds = self._coerce_int(
-            state.get("max_tool_execution_rounds"),
-            self.DEFAULT_MAX_TOOL_EXECUTION_ROUNDS,
+        decision = agent_routing.decide_next_step(
+            state,
+            default_max_tool_execution_rounds=self.DEFAULT_MAX_TOOL_EXECUTION_ROUNDS,
+            coerce_int=self._coerce_int,
+            has_successful_normalized_evidence=self._has_successful_normalized_evidence,
+            select_follow_up_tool_calls=self._select_follow_up_tool_calls,
         )
-        if current_round >= max_rounds:
-            print(
-                "Routing decision: sufficient_intel "
-                f"(tool round limit reached: {current_round}/{max_rounds})"
-            )
-            return "sufficient_intel"
-
-        if current_round > 0 and not self._has_successful_normalized_evidence(state):
-            print(
-                "Routing decision: no_successful_evidence "
-                "(no successful non-skipped enrichment evidence)"
-            )
-            return "no_successful_evidence"
-
-        follow_up_calls = self._select_follow_up_tool_calls(state)
-        if follow_up_calls:
-            print(
-                "Routing decision: needs_more_intel "
-                f"({len(follow_up_calls)} unqueried enrichment tools available)"
-            )
-            return "needs_more_intel"
-
-        print("Routing decision: sufficient_intel (no follow-up tools needed)")
-        return "sufficient_intel"
+        self._emit_terminal(f"Routing decision: {decision}", progress=76)
+        return decision
 
     def extract_iocs(self, state: InvestigationState) -> Dict[str, Any]:
         """
@@ -316,46 +185,34 @@ class DFIRAgent:
             )
 
         print("\n=== STAGE 1: IOC EXTRACTION ===")
+        self._emit_terminal(
+            "=" * 60 + "\nSTAGE 1: IOC EXTRACTION\n" + "=" * 60,
+            progress=62,
+            level="stage",
+        )
 
         anomalies = state["anomalies"]
         parsed_logs = state["parsed_logs"]
+        self._emit_terminal(
+            f"Scanning {len(anomalies)} anomalous windows for IOC candidates...",
+            progress=62,
+        )
 
-        iocs = []
-
-        for anomaly in anomalies:
-            # Get logs for this anomaly window
-            start_idx = anomaly["start_idx"]
-            end_idx = anomaly["end_idx"]
-            window_logs = parsed_logs.iloc[start_idx : end_idx + 1]
-
-            # Extract IOCs from parameters
-            for _, log_entry in window_logs.iterrows():
-                params = json.loads(log_entry.get("parameters", "[]"))
-
-                for param in params:
-                    ioc_type = self._identify_ioc_type(param)
-                    if ioc_type:
-                        iocs.append(
-                            {
-                                "value": param,
-                                "type": ioc_type,
-                                "source_line": log_entry["event_id"],
-                                "window_id": anomaly["window_id"],
-                            }
-                        )
-
-        # Deduplicate IOCs
-        unique_iocs = []
-        seen = set()
-        for ioc in iocs:
-            key = f"{ioc['type']}:{ioc['value']}"
-            if key not in seen:
-                seen.add(key)
-                unique_iocs.append(ioc)
+        unique_iocs = agent_ioc.extract_iocs_from_anomalies(
+            anomalies,
+            parsed_logs,
+            self._identify_ioc_type,
+        )
 
         print(f"Extracted {len(unique_iocs)} unique IOCs")
+        self._emit_terminal(
+            f"Extracted {len(unique_iocs)} unique IOCs",
+            progress=64,
+            level="success",
+        )
         for ioc in unique_iocs[:5]:  # Show first 5
             print(f"  - {ioc['type']}: {ioc['value']}")
+            self._emit_terminal(f"  - {ioc['type']}: {ioc['value']}", progress=64)
 
         return {
             "iocs_extracted": unique_iocs,
@@ -372,504 +229,41 @@ class DFIRAgent:
         The planner is fail-open and additive: it never increments the threat-intel
         execution round, and tool selection can still fall back to existing paths.
         """
-        if self.status_callback and self.session_id:
-            self.status_callback(
-                self.session_id,
-                "ai_agent",
-                "AI sedang menyusun rencana investigasi IOC...",
-                65,
-            )
-
-        print("\n=== STAGE 2: INVESTIGATION PLANNING ===")
-
-        iocs = state.get("iocs_extracted") or []
-        planning_round = self._coerce_int(state.get("planning_round"), 0) + 1
-        max_rounds = self._coerce_int(state.get("max_planning_rounds"), 1)
-
-        if not iocs:
-            print("No IOCs available for planning")
-            return {
-                "planned_tool_calls": [],
-                "planning_steps": [
-                    "Planner found no extracted IOCs, so enrichment planning was skipped"
-                ],
-                "planning_completed": True,
-                "planning_round": planning_round,
-                "current_stage": "planning_complete",
-            }
-
-        if planning_round > max_rounds:
-            print(
-                "Planning round limit reached "
-                f"({planning_round - 1}/{max_rounds}); deferring to tool selector"
-            )
-            return {
-                "planned_tool_calls": [],
-                "planning_steps": [
-                    "Planner deferred to tool selector because the planning round limit was reached"
-                ],
-                "planning_completed": False,
-                "planning_round": planning_round,
-                "current_stage": "planning_deferred",
-            }
-
-        memory_tool_calls, memory_reasons = self._select_tools_from_memory(iocs)
-        plan_source = "procedural memory"
-        candidate_calls = memory_tool_calls
-        planning_steps = list(memory_reasons[:5])
-
-        if not candidate_calls:
-            candidate_calls = self._fallback_tool_selection(iocs)
-            plan_source = "static IOC playbook"
-            planning_steps.append(
-                "Planner used static IOC playbooks because procedural memory did not provide supported tools"
-            )
-
-        planned_calls = self._dedupe_tool_calls(candidate_calls)
-        print(
-            f"Planner selected {len(planned_calls)} tool calls from {plan_source} "
-            f"for {len(iocs)} IOCs"
-        )
-
-        return {
-            "planned_tool_calls": planned_calls,
-            "planning_steps": [
-                f"Planner decomposed {len(iocs)} IOCs into {len(planned_calls)} prioritized enrichment calls using {plan_source}"
-            ]
-            + planning_steps,
-            "planning_completed": True,
-            "planning_round": planning_round,
-            "current_stage": "planning_complete",
-        }
+        return agent_selection.plan_goals(self, state)
 
     def select_tools(self, state: InvestigationState) -> Dict[str, Any]:
         """
         Node: Use LLM to select appropriate threat intel tools for each IOC
         """
-        if self.status_callback and self.session_id:
-            self.status_callback(
-                self.session_id,
-                "ai_agent",
-                "AI sedang memilih tools untuk analisis...",
-                67,
-            )
-
-        print("\n=== STAGE 2: TOOL SELECTION ===")
-
-        iocs = state["iocs_extracted"]
-
-        if not iocs:
-            print("No IOCs to investigate")
-            return {
-                "tool_calls": [],
-                "tool_selection_trace": [],
-                "reasoning_steps": ["No IOCs extracted, skipping tool selection"],
-            }
-
-        print(f"IOCs to analyze: {len(iocs)}")
-
-        reflection_tool_calls = self._select_new_reflection_tool_calls(state)
-        if reflection_tool_calls:
-            print(
-                "Reflection loop provided "
-                f"{len(reflection_tool_calls)} targeted follow-up tool calls"
-            )
-            return {
-                "tool_calls": reflection_tool_calls,
-                "tool_selection_trace": self._tool_selection_trace(reflection_tool_calls),
-                "current_stage": "reflection_guided_tool_selection_complete",
-                "reasoning_steps": [
-                    f"Used post-correlation reflection output for {len(reflection_tool_calls)} follow-up tool calls"
-                ],
-            }
-
-        tool_execution_round = self._coerce_int(state.get("tool_execution_round"), 0)
-        if tool_execution_round > 0:
-            tool_calls = self._select_follow_up_tool_calls(state)
-            print(
-                "Follow-up selection round "
-                f"{tool_execution_round + 1}: {len(tool_calls)} new tool calls"
-            )
-            if not tool_calls:
-                return {
-                    "tool_calls": [],
-                    "tool_selection_trace": [],
-                    "current_stage": "follow_up_tool_selection_complete",
-                    "reasoning_steps": [
-                        "No unqueried follow-up tools remained after reviewing observations"
-                    ],
-                }
-
-            return {
-                "tool_calls": tool_calls,
-                "tool_selection_trace": self._tool_selection_trace(tool_calls),
-                "current_stage": "follow_up_tool_selection_complete",
-                "reasoning_steps": [
-                    f"Selected {len(tool_calls)} follow-up tool calls based on prior observations"
-                ],
-            }
-
-        planned_tool_calls = self._select_new_planned_tool_calls(state)
-        if planned_tool_calls:
-            print(
-                "Planner provided "
-                f"{len(planned_tool_calls)} ready-to-execute tool calls"
-            )
-            return {
-                "tool_calls": planned_tool_calls,
-                "tool_selection_trace": self._tool_selection_trace(planned_tool_calls),
-                "current_stage": "planner_guided_tool_selection_complete",
-                "reasoning_steps": [
-                    f"Used Phase 4 planner output for {len(planned_tool_calls)} initial tool calls"
-                ],
-            }
-
-        memory_tool_calls, memory_reasons = self._select_tools_from_memory(iocs)
-        if memory_tool_calls:
-            print(
-                "Procedural memory selected "
-                f"{len(memory_tool_calls)} tool calls for {len(iocs)} IOCs"
-            )
-            return {
-                "tool_calls": memory_tool_calls,
-                "tool_selection_trace": self._tool_selection_trace(memory_tool_calls),
-                "current_stage": "memory_guided_tool_selection_complete",
-                "reasoning_steps": [
-                    f"Procedural memory selected {len(memory_tool_calls)} tool calls"
-                ]
-                + memory_reasons[:5],
-            }
-
-        # Create prompt for LLM
-        prompt = self._create_tool_selection_prompt(iocs)
-        print(f"\nPrompt length: {len(prompt)} chars")
-        print("Sending tool selection request to LLM...")
-
-        # Get LLM response
-        try:
-            import time
-
-            start_time = time.time()
-            response = self.llm.invoke(prompt)
-            elapsed = time.time() - start_time
-
-            print(f"\n[OK] LLM Response received ({elapsed:.2f}s)")
-            print("-" * 60)
-            print(f"Response preview:\n{response[:300]}")
-            if len(response) > 300:
-                print(f"... ({len(response) - 300} more chars)")
-            print("-" * 60)
-
-            # Parse tool selections
-            tool_calls = self._parse_tool_selections(response, iocs)
-
-            print(f"\nParsed {len(tool_calls)} tool calls:")
-            tool_summary = {}
-            for call in tool_calls:
-                tool_summary[call["tool"]] = tool_summary.get(call["tool"], 0) + 1
-
-            for tool, count in tool_summary.items():
-                print(f"  - {tool}: {count} calls")
-
-            # Show examples
-            if tool_calls:
-                print("\nExample tool calls:")
-                for call in tool_calls[:3]:
-                    print(
-                        f"  - {call['tool']} for {call['ioc_type']}: {call['ioc'][:50]}"
-                    )
-
-            return {
-                "tool_calls": tool_calls,
-                "tool_selection_trace": self._tool_selection_trace(tool_calls),
-                "reasoning_steps": [
-                    f"Selected {len(tool_calls)} tool calls based on IOC types"
-                ],
-            }
-
-        except Exception as e:
-            print(f"\n[WARN] Error in tool selection: {e}")
-            import traceback
-
-            print(traceback.format_exc())
-            # Fallback: use simple heuristics
-            print("\nUsing fallback tool selection...")
-            tool_calls = self._fallback_tool_selection(iocs)
-            return {
-                "tool_calls": tool_calls,
-                "tool_selection_trace": self._tool_selection_trace(tool_calls),
-                "reasoning_steps": [f"Used fallback tool selection due to error: {e}"],
-            }
+        return agent_selection.select_tools(self, state)
 
     def execute_tools(self, state: InvestigationState) -> Dict[str, Any]:
         """
         Node: Execute selected threat intel tools
         """
-        if self.status_callback and self.session_id:
-            selected_tools = [t["tool"] for t in state.get("tool_calls", [])]
-            if selected_tools:
-                tool_names = ", ".join(set(selected_tools[:3]))  # Unique tools
-                self.status_callback(
-                    self.session_id,
-                    "ai_agent",
-                    f"Menggunakan tools: {tool_names}...",
-                    72,
-                )
-            else:
-                self.status_callback(
-                    self.session_id,
-                    "ai_agent",
-                    "Menjalankan threat intelligence tools...",
-                    72,
-                )
-
-        print("\n=== STAGE 3: TOOL EXECUTION ===")
-        all_tool_calls = state["tool_calls"]
-        executed_keys = self._attempted_tool_call_keys(state)
-        tool_calls = [
-            call
-            for call in all_tool_calls
-            if self._tool_call_key(call) not in executed_keys
-        ]
-        validation_trace = [
-            self._validate_tool_call_for_audit(call, "accepted_for_execution")
-            for call in tool_calls
-        ]
-        skipped_existing = len(all_tool_calls) - len(tool_calls)
-        print(f"Total tool calls in state: {len(all_tool_calls)}")
-        print(f"New tool calls to execute: {len(tool_calls)}")
-        if skipped_existing:
-            print(f"Skipping {skipped_existing} previously executed tool calls")
-
-        results = []
-        next_round = self._coerce_int(state.get("tool_execution_round"), 0) + 1
-
-        if not tool_calls:
-            evidence_update = self._build_evidence_state_update(state, [])
-            return {
-                "tool_results": [],
-                "tool_validation_trace": validation_trace,
-                "tool_execution_round": next_round,
-                "current_stage": "tool_execution_complete",
-                "reasoning_steps": [
-                    f"No new threat intel queries to execute in round {next_round}"
-                ],
-                "agent_trace": [
-                    self._agent_trace_event(
-                        "tool_executor",
-                        "no_new_tool_calls",
-                        f"No new threat intel queries to execute in round {next_round}",
-                    )
-                ],
-                **evidence_update,
-            }
-
-        max_workers = min(32, len(tool_calls))
-        print(f"Executing {len(tool_calls)} tool calls with {max_workers} workers")
-
-        ordered_results: List[Optional[Dict[str, Any]]] = [None] * len(tool_calls)
-        elapsed_by_index: Dict[int, float] = {}
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {
-                executor.submit(self._execute_single_tool_call, call, idx, len(tool_calls)): idx
-                for idx, call in enumerate(tool_calls)
-            }
-            for future in as_completed(futures):
-                idx = futures[future]
-                try:
-                    result, elapsed = future.result()
-                except Exception as e:
-                    call = tool_calls[idx]
-                    tool_name = str(call.get("tool"))
-                    ioc = str(call.get("ioc"))
-                    ioc_type = str(call.get("ioc_type")).lower()
-                    elapsed = 0.0
-                    result = {
-                        "tool": tool_name,
-                        "tool_call": tool_name,
-                        "ioc": ioc,
-                        "ioc_type": ioc_type,
-                        "error": str(e),
-                        "status": "error",
-                        "data": [],
-                    }
-
-                ordered_results[idx] = result
-                elapsed_by_index[idx] = elapsed
-
-        for idx, result in enumerate(ordered_results):
-            if result is None:
-                continue
-            tool_name = str(result.get("tool_call") or result.get("tool"))
-            ioc_type = str(result.get("ioc_type") or "").lower()
-            elapsed = elapsed_by_index.get(idx, 0.0)
-            self._record_tool_performance(tool_name, result, elapsed, ioc_type)
-            self._print_tool_result_summary(result, elapsed)
-            results.append(result)
-            validation_trace[idx]["execution_status"] = result.get("status", "ok")
-            if result.get("skipped") or result.get("status") == "skipped":
-                validation_trace[idx]["status"] = "rejected"
-                validation_trace[idx]["reason"] = result.get("reason", "skipped")
-            elif result.get("error") or result.get("status") == "error":
-                validation_trace[idx]["status"] = "error"
-                validation_trace[idx]["reason"] = result.get("error", "tool error")
-
-        print(f"Executed {len(results)} tool calls")
-        evidence_update = self._build_evidence_state_update(state, results)
-
-        return {
-            "tool_results": results,
-            "normalized_evidence": evidence_update["normalized_evidence"],
-            "aggregated_ioc_evidence": evidence_update["aggregated_ioc_evidence"],
-            "supporting_evidence": evidence_update["supporting_evidence"],
-            "investigation_confidence": evidence_update["investigation_confidence"],
-            "confidence_factors": evidence_update["confidence_factors"],
-            "investigation_status": evidence_update["investigation_status"],
-            "tool_validation_trace": validation_trace,
-            "agent_trace": [
-                self._agent_trace_event(
-                    "tool_executor",
-                    "completed",
-                    f"Executed {len(results)} threat intel queries in round {next_round}",
-                )
-            ],
-            "tool_execution_round": next_round,
-            "current_stage": "tool_execution_complete",
-            "reasoning_steps": [
-                f"Executed {len(results)} threat intel queries in round {next_round}"
-            ],
-        }
+        return agent_execution.execute_tools(self, state)
 
     def _execute_single_tool_call(
         self, call: Mapping[str, Any], index: int, total: int
     ) -> tuple[Dict[str, Any], float]:
         """Execute one threat-intel call. Safe to run inside a worker thread."""
-        tool_name = str(call["tool"])
-        ioc = str(call["ioc"])
-        ioc_type = str(call["ioc_type"]).lower()
-
-        print(f"\n[{index + 1}/{total}] Executing: {tool_name}")
-        print(f"  IOC: {ioc} (type: {ioc_type})")
-        start_time = time.time()
-
-        try:
-            skip_reason = self._get_tool_call_skip_reason(tool_name, ioc, ioc_type)
-            if skip_reason:
-                elapsed = time.time() - start_time
-                return (
-                    {
-                        "tool": tool_name,
-                        "tool_call": tool_name,
-                        "ioc": ioc,
-                        "ioc_type": ioc_type,
-                        "status": "skipped",
-                        "skipped": True,
-                        "reason": skip_reason,
-                        "data": [],
-                    },
-                    elapsed,
-                )
-
-            if tool_name == "threatfox_lookup":
-                threatfox_ioc_type = {
-                    "md5": "md5_hash",
-                    "sha256": "sha256_hash",
-                }.get(ioc_type, ioc_type)
-                result = self.threat_intel.threatfox_lookup(ioc, threatfox_ioc_type)
-            elif tool_name == "malwarebazaar_lookup":
-                result = self.threat_intel.malwarebazaar_lookup(ioc)
-            elif tool_name == "urlhaus_lookup":
-                result = self.threat_intel.urlhaus_lookup(ioc)
-            elif tool_name == "alienvault_otx_lookup":
-                otx_ioc_type = "IPv4" if ioc_type == "ip" else ioc_type
-                result = self.threat_intel.alienvault_otx_lookup(ioc, otx_ioc_type)
-            elif tool_name == "greynoise_lookup":
-                result = self.threat_intel.greynoise_lookup(ioc)
-            elif tool_name == "virustotal_lookup":
-                vt_ioc_type = "file" if ioc_type in ["md5", "sha256"] else ioc_type
-                result = self.threat_intel.virustotal_lookup(ioc, vt_ioc_type)
-            else:
-                result = {
-                    "tool": tool_name,
-                    "tool_call": tool_name,
-                    "ioc": ioc,
-                    "ioc_type": ioc_type,
-                    "error": f"Unknown tool: {tool_name}",
-                    "status": "error",
-                    "data": [],
-                }
-
-            result.setdefault("tool_call", tool_name)
-            result.setdefault("ioc", ioc)
-            provider_ioc_type = result.get("ioc_type")
-            if provider_ioc_type and str(provider_ioc_type).lower() != ioc_type:
-                result.setdefault("provider_ioc_type", provider_ioc_type)
-            result["ioc_type"] = ioc_type
-            result.setdefault("data", [])
-            return result, time.time() - start_time
-
-        except Exception as e:
-            import traceback
-
-            print(f"  [ERROR] Exception: {e}")
-            print(f"  Traceback: {traceback.format_exc()[:200]}")
-            return (
-                {
-                    "tool": tool_name,
-                    "tool_call": tool_name,
-                    "ioc": ioc,
-                    "ioc_type": ioc_type,
-                    "error": str(e),
-                    "status": "error",
-                    "data": [],
-                },
-                time.time() - start_time,
-            )
+        return agent_execution.execute_single_tool_call(self, call, index, total)
 
     def _print_tool_result_summary(self, result: Mapping[str, Any], elapsed: float) -> None:
         """Print a compact ASCII-only summary for a tool result."""
-        if result.get("status") == "skipped" or result.get("skipped"):
-            print(f"  [SKIP] ({elapsed:.2f}s): {result.get('reason', 'skipped')}")
-        elif result.get("error"):
-            http_status = result.get("http_status")
-            suffix = f" (HTTP {http_status})" if http_status else ""
-            print(f"  [WARN] Error{suffix}: {result['error']}")
-        elif result.get("data"):
-            print(f"  [OK] Success ({elapsed:.2f}s): Found data")
-            if isinstance(result["data"], dict):
-                keys = list(result["data"].keys())[:3]
-                print(f"    Keys: {keys}")
-            elif isinstance(result["data"], list):
-                print(f"    Results: {len(result['data'])} items")
-        else:
-            print(f"  [OK] Completed ({elapsed:.2f}s): No data found")
+        agent_execution.print_tool_result_summary(result, elapsed)
 
     def _get_tool_call_skip_reason(
         self, tool_name: str, ioc: str, ioc_type: str
     ) -> Optional[str]:
-        supported_ioc_types = self.TOOL_TO_IOC_TYPES.get(tool_name)
-        if supported_ioc_types is None:
-            return f"unsupported tool '{tool_name}'"
-
-        normalized_ioc_type = str(ioc_type or "").lower()
-        if not str(ioc or "").strip():
-            return "empty IOC value"
-        if normalized_ioc_type not in self.IOC_TYPES:
-            return f"unsupported IOC type '{ioc_type}'"
-
-        if normalized_ioc_type not in supported_ioc_types:
-            return f"tool '{tool_name}' does not support IOC type '{ioc_type}'"
-
-        identified_ioc_type = self._identify_ioc_type(ioc)
-        if identified_ioc_type is None:
-            return "IOC value failed validation"
-
-        if identified_ioc_type != normalized_ioc_type:
-            return (
-                f"IOC value matches type '{identified_ioc_type}', not '{normalized_ioc_type}'"
-            )
-
-        return None
+        return agent_tooling.get_tool_call_skip_reason(
+            tool_name,
+            ioc,
+            ioc_type,
+            self.TOOL_TO_IOC_TYPES,
+            self.IOC_TYPES,
+            self._identify_ioc_type,
+        )
 
     def _select_tools_from_memory(
         self, iocs: List[Dict[str, Any]]
@@ -926,65 +320,35 @@ class DFIRAgent:
         self, state: InvestigationState
     ) -> List[Dict[str, Any]]:
         """Return valid planned calls that have not produced observations yet."""
-        planned_calls = state.get("planned_tool_calls") or []
-        if not planned_calls:
-            return []
-
-        attempted_keys = self._attempted_tool_call_keys(state)
-        return [
-            call
-            for call in self._dedupe_tool_calls(planned_calls)
-            if self._tool_call_key(call) not in attempted_keys
-        ]
+        return agent_tooling.select_new_tool_calls(
+            state,
+            "planned_tool_calls",
+            self.TOOL_TO_IOC_TYPES,
+            self.TOOL_RESULT_ALIASES,
+            self._identify_ioc_type,
+        )
 
     def _select_new_reflection_tool_calls(
         self, state: InvestigationState
     ) -> List[Dict[str, Any]]:
         """Return post-correlation reflection calls that remain unattempted."""
-        follow_up_calls = state.get("post_correlation_follow_up_calls") or []
-        if not follow_up_calls:
-            return []
-
-        attempted_keys = self._attempted_tool_call_keys(state)
-        return [
-            call
-            for call in self._dedupe_tool_calls(follow_up_calls)
-            if self._tool_call_key(call) not in attempted_keys
-        ]
+        return agent_tooling.select_new_tool_calls(
+            state,
+            "post_correlation_follow_up_calls",
+            self.TOOL_TO_IOC_TYPES,
+            self.TOOL_RESULT_ALIASES,
+            self._identify_ioc_type,
+        )
 
     def _dedupe_tool_calls(
         self, tool_calls: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
         """Normalize and deduplicate executable tool calls while preserving order."""
-        deduped = []
-        seen = set()
-
-        for call in tool_calls:
-            tool_name = self._normalize_tool_name(call.get("tool"))
-            ioc_type = str(call.get("ioc_type") or "").lower()
-            ioc_value = str(call.get("ioc") or "")
-            if not tool_name or not ioc_type or not ioc_value:
-                continue
-            if tool_name not in self.TOOL_TO_IOC_TYPES:
-                continue
-            if ioc_type not in self.TOOL_TO_IOC_TYPES.get(tool_name, set()):
-                continue
-
-            normalized_call = self._build_tool_call(
-                ioc_value,
-                ioc_type,
-                tool_name,
-                selection_source=str(call.get("selection_source") or "fallback_heuristic"),
-                selection_reason=str(call.get("selection_reason") or "validated tool call"),
-                expected_evidence=str(call.get("expected_evidence") or "IOC reputation and provider status"),
-            )
-            key = self._tool_call_key(normalized_call)
-            if key in seen:
-                continue
-            seen.add(key)
-            deduped.append(normalized_call)
-
-        return deduped
+        return agent_tooling.dedupe_tool_calls(
+            tool_calls,
+            self.TOOL_TO_IOC_TYPES,
+            self.TOOL_RESULT_ALIASES,
+        )
 
     def _build_tool_call(
         self,
@@ -997,56 +361,37 @@ class DFIRAgent:
         expected_evidence: str = "IOC reputation and provider status",
     ) -> Dict[str, Any]:
         """Create a traceable threat-intel tool call without changing core keys."""
-        source = selection_source if selection_source in {"llm", "fallback_heuristic"} else "fallback_heuristic"
-        return {
-            "ioc": str(ioc or ""),
-            "ioc_type": str(ioc_type or "").lower(),
-            "tool": self._normalize_tool_name(tool),
-            "selection_source": source,
-            "selection_reason": selection_reason or "static IOC-to-tool mapping",
-            "expected_evidence": expected_evidence or "IOC reputation and provider status",
-        }
+        return agent_tooling.build_tool_call(
+            ioc,
+            ioc_type,
+            tool,
+            self.TOOL_RESULT_ALIASES,
+            selection_source=selection_source,
+            selection_reason=selection_reason,
+            expected_evidence=expected_evidence,
+        )
 
     def _tool_selection_trace(self, tool_calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Build additive audit records for selected tool calls."""
-        trace = []
-        for index, call in enumerate(tool_calls, start=1):
-            trace.append(
-                {
-                    "sequence": index,
-                    "tool": call.get("tool"),
-                    "ioc": call.get("ioc"),
-                    "ioc_type": call.get("ioc_type"),
-                    "selection_source": call.get("selection_source", "fallback_heuristic"),
-                    "selection_reason": call.get("selection_reason", "validated tool call"),
-                    "expected_evidence": call.get("expected_evidence", "IOC reputation and provider status"),
-                    "status": "selected",
-                }
-            )
-        return trace
+        return agent_tooling.tool_selection_trace(tool_calls)
 
     def _memory_strategy_tool_names(self, strategy: Mapping[str, Any]) -> List[str]:
         """Convert ProceduralMemory primary/fallback tool keys to agent tool names."""
-        tool_names = []
-        raw_tools = [strategy.get("primary")] + list(strategy.get("fallback") or [])
-
-        for raw_tool in raw_tools:
-            tool_name = self._agent_tool_name(raw_tool)
-            if not tool_name or tool_name in tool_names:
-                continue
-            tool_names.append(tool_name)
-
-        return tool_names
+        return agent_tooling.memory_strategy_tool_names(
+            strategy, self.MEMORY_TOOL_TO_AGENT_TOOL
+        )
 
     def _agent_tool_name(self, memory_tool_name: Any) -> Optional[str]:
-        normalized = str(memory_tool_name or "").strip().lower()
-        if not normalized:
-            return None
-        return self.MEMORY_TOOL_TO_AGENT_TOOL.get(normalized)
+        return agent_tooling.agent_tool_name(
+            memory_tool_name, self.MEMORY_TOOL_TO_AGENT_TOOL
+        )
 
     def _memory_tool_name(self, agent_tool_name: Any) -> str:
-        normalized = self._normalize_tool_name(agent_tool_name)
-        return self.AGENT_TOOL_TO_MEMORY_TOOL.get(normalized, normalized)
+        return agent_tooling.memory_tool_name(
+            agent_tool_name,
+            self.TOOL_RESULT_ALIASES,
+            self.AGENT_TOOL_TO_MEMORY_TOOL,
+        )
 
     def _record_tool_performance(
         self,
@@ -1072,265 +417,77 @@ class DFIRAgent:
             print(f"[WARN] Procedural memory performance update failed: {e}")
 
     def _tool_result_succeeded(self, result: Mapping[str, Any]) -> bool:
-        if result.get("error") or result.get("status") == "error":
-            return False
-        if result.get("status") == "skipped" or result.get("skipped"):
-            return False
-        return True
+        return agent_tooling.tool_result_succeeded(result)
 
     def _validate_tool_call_for_audit(
         self, call: Mapping[str, Any], default_status: str = "accepted"
     ) -> Dict[str, Any]:
         """Return a deterministic validation record for a proposed tool call."""
-        tool_name = self._normalize_tool_name(call.get("tool"))
-        ioc = str(call.get("ioc") or "")
-        ioc_type = str(call.get("ioc_type") or "").lower()
-        reason = self._get_tool_call_skip_reason(tool_name, ioc, ioc_type)
-        status = "rejected" if reason else default_status
-        return {
-            "tool": tool_name,
-            "ioc": ioc,
-            "ioc_type": ioc_type,
-            "status": status,
-            "reason": reason or "validated",
-            "selection_source": call.get("selection_source", "fallback_heuristic"),
-            "selection_reason": call.get("selection_reason", "validated tool call"),
-            "expected_evidence": call.get("expected_evidence", "IOC reputation and provider status"),
-        }
+        return agent_tooling.validate_tool_call_for_audit(
+            call,
+            default_status,
+            self.TOOL_RESULT_ALIASES,
+            self.TOOL_TO_IOC_TYPES,
+            self.IOC_TYPES,
+            self._identify_ioc_type,
+        )
 
     def normalize_tool_result(self, tool_result: Mapping[str, Any]) -> Dict[str, Any]:
         """Normalize provider-specific threat-intel output into an auditable schema."""
-        tool_name = self._normalize_tool_name(tool_result.get("tool_call") or tool_result.get("tool"))
-        source = tool_name or str(tool_result.get("tool") or "unknown")
-        ioc = self._extract_tool_result_ioc(tool_result)
-        ioc_type = str(tool_result.get("ioc_type") or "").lower()
-        if not ioc_type and ioc:
-            ioc_type = self._identify_ioc_type(ioc) or "unknown"
-
-        raw_status = str(tool_result.get("status") or "unknown")
-        verdict = "unknown"
-        confidence = 0.2
-        summary_parts: List[str] = []
-
-        if tool_result.get("skipped") or raw_status == "skipped":
-            verdict = "error"
-            confidence = 0.0
-            summary_parts.append(str(tool_result.get("reason") or "tool call skipped"))
-        elif tool_result.get("error") or raw_status == "error":
-            verdict = "error"
-            confidence = 0.0
-            summary_parts.append(str(tool_result.get("error") or "tool returned error"))
-        elif self._is_malicious_tool_result(dict(tool_result)):
-            verdict = "malicious"
-            confidence = 0.85
-        elif self._is_suspicious_tool_result(dict(tool_result)):
-            verdict = "suspicious"
-            confidence = 0.65
-        elif str(tool_result.get("classification") or "").lower() in {"benign", "clean", "riot"}:
-            verdict = "benign"
-            confidence = 0.6
-
-        malicious_count = self._safe_positive_count(tool_result.get("malicious"))
-        suspicious_count = self._safe_positive_count(tool_result.get("suspicious"))
-        harmless_count = self._safe_positive_count(tool_result.get("harmless"))
-        if malicious_count > 0:
-            verdict = "malicious"
-            confidence = min(1.0, 0.75 + malicious_count * 0.03)
-            summary_parts.append(f"malicious detections={malicious_count}")
-        elif suspicious_count > 0:
-            verdict = "suspicious"
-            confidence = min(0.85, 0.55 + suspicious_count * 0.05)
-            summary_parts.append(f"suspicious detections={suspicious_count}")
-        elif harmless_count > 0 and verdict == "unknown":
-            verdict = "benign"
-            confidence = 0.55
-            summary_parts.append(f"harmless detections={harmless_count}")
-
-        if source == "threatfox_lookup":
-            if tool_result.get("malware_family") or tool_result.get("threat_type"):
-                verdict = "malicious"
-                confidence = max(confidence, self._coerce_confidence(tool_result.get("confidence_level"), 0.8))
-            summary_parts.extend(
-                self._present_values(
-                    [tool_result.get("malware_family"), tool_result.get("threat_type")]
-                )
-            )
-        elif source == "malwarebazaar_lookup":
-            if tool_result.get("signature") or tool_result.get("data"):
-                verdict = "malicious"
-                confidence = max(confidence, 0.8)
-            summary_parts.extend(
-                self._present_values([tool_result.get("signature"), tool_result.get("file_type")])
-            )
-        elif source == "urlhaus_lookup":
-            if tool_result.get("threat") or str(tool_result.get("url_status") or "").lower() in {"online", "offline"}:
-                verdict = "malicious" if str(tool_result.get("url_status") or "").lower() == "online" else "suspicious"
-                confidence = max(confidence, 0.75 if verdict == "malicious" else 0.6)
-            summary_parts.extend(
-                self._present_values([tool_result.get("url_status"), tool_result.get("threat")])
-            )
-        elif source == "alienvault_otx_lookup":
-            pulse_count = self._safe_positive_count(tool_result.get("pulse_count"))
-            if pulse_count > 0:
-                verdict = "suspicious"
-                confidence = min(0.85, 0.55 + pulse_count * 0.04)
-                summary_parts.append(f"pulse_count={pulse_count}")
-        elif source == "greynoise_lookup":
-            classification = str(tool_result.get("classification") or "").lower()
-            if classification in {"malicious", "suspicious", "benign"}:
-                verdict = classification
-                confidence = max(confidence, 0.65 if classification != "benign" else 0.6)
-            summary_parts.extend(
-                self._present_values([tool_result.get("classification"), tool_result.get("message")])
-            )
-
-        if not summary_parts and tool_result.get("data"):
-            summary_parts.append("provider response available")
-        if not summary_parts:
-            summary_parts.append("no explicit threat signal")
-
-        return {
-            "ioc": ioc,
-            "ioc_type": ioc_type or "unknown",
-            "source": source,
-            "verdict": verdict if verdict in {"malicious", "suspicious", "benign", "unknown", "error"} else "unknown",
-            "confidence": max(0.0, min(float(confidence), 1.0)),
-            "evidence_summary": "; ".join(summary_parts[:4]),
-            "raw_status": raw_status,
-            "raw_reference": self._tool_result_raw_reference(tool_result, source, ioc),
-        }
+        return agent_evidence.normalize_tool_result(
+            tool_result,
+            aliases=self.TOOL_RESULT_ALIASES,
+            identify_ioc_type=self._identify_ioc_type,
+            is_malicious_tool_result=self._is_malicious_tool_result,
+            is_suspicious_tool_result=self._is_suspicious_tool_result,
+            safe_positive_count=self._safe_positive_count,
+        )
 
     def aggregate_ioc_evidence(
         self, normalized_evidence: List[Dict[str, Any]]
     ) -> Dict[str, Dict[str, Any]]:
         """Aggregate successful normalized evidence per IOC deterministically."""
-        priority = {"malicious": 4, "suspicious": 3, "benign": 2, "unknown": 1, "error": 0}
-        aggregated: Dict[str, Dict[str, Any]] = {}
-        for evidence in normalized_evidence:
-            if not self._normalized_evidence_succeeded(evidence):
-                continue
-            ioc = str(evidence.get("ioc") or "")
-            ioc_type = str(evidence.get("ioc_type") or "unknown")
-            if not ioc:
-                continue
-            key = f"{ioc_type}:{ioc}"
-            existing = aggregated.get(key)
-            verdict = str(evidence.get("verdict") or "unknown")
-            confidence = float(evidence.get("confidence") or 0.0)
-            if existing is None:
-                aggregated[key] = {
-                    "ioc": ioc,
-                    "ioc_type": ioc_type,
-                    "verdict": verdict,
-                    "confidence": confidence,
-                    "sources": [evidence.get("source")],
-                    "evidence": [evidence],
-                    "evidence_count": 1,
-                }
-                continue
-            existing_sources = {
-                str(source)
-                for source in existing.get("sources", [])
-                if source not in (None, "")
-            }
-            source = evidence.get("source")
-            if source not in (None, ""):
-                existing_sources.add(str(source))
-            existing["sources"] = sorted(existing_sources)
-            existing["evidence"].append(evidence)
-            existing["evidence_count"] = len(existing["evidence"])
-            if (priority.get(verdict, 0), confidence) > (
-                priority.get(str(existing.get("verdict") or "unknown"), 0),
-                float(existing.get("confidence") or 0.0),
-            ):
-                existing["verdict"] = verdict
-                existing["confidence"] = confidence
-        return aggregated
+        return agent_evidence.aggregate_ioc_evidence(normalized_evidence)
 
     def _build_evidence_state_update(
         self, state: Mapping[str, Any], new_results: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
-        normalized_new = [self.normalize_tool_result(result) for result in new_results]
-        all_normalized = list(state.get("normalized_evidence") or []) + normalized_new
-        aggregated = self.aggregate_ioc_evidence(all_normalized)
-        supporting = self._supporting_evidence_from_aggregation(aggregated)
-        confidence, factors = self._derive_investigation_confidence(supporting, all_normalized)
-        return {
-            "normalized_evidence": normalized_new,
-            "aggregated_ioc_evidence": aggregated,
-            "supporting_evidence": supporting,
-            "investigation_confidence": confidence,
-            "confidence_factors": factors,
-            "investigation_status": "evidence_collected" if supporting else state.get("investigation_status", "inconclusive"),
-        }
+        return agent_evidence.build_evidence_state_update(
+            state, new_results, self.normalize_tool_result
+        )
 
     def _supporting_evidence_from_aggregation(
         self, aggregated: Dict[str, Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
-        supporting = []
-        for key in sorted(aggregated):
-            item = aggregated[key]
-            for evidence in item.get("evidence", []):
-                if self._normalized_evidence_succeeded(evidence):
-                    supporting.append(evidence)
-        return supporting
+        return agent_evidence.supporting_evidence_from_aggregation(aggregated)
 
     def _derive_investigation_confidence(
         self,
         supporting: List[Dict[str, Any]],
         all_normalized: List[Dict[str, Any]],
     ) -> tuple[float, List[str]]:
-        if not supporting:
-            return 0.0, ["No successful non-skipped enrichment evidence was available"]
-        max_confidence = max(float(item.get("confidence") or 0.0) for item in supporting)
-        source_count = len({item.get("source") for item in supporting})
-        ioc_count = len({(item.get("ioc_type"), item.get("ioc")) for item in supporting})
-        error_count = len([item for item in all_normalized if item.get("verdict") == "error"])
-        confidence = min(1.0, max_confidence + min(source_count, 3) * 0.03)
-        if error_count:
-            confidence = max(0.0, confidence - min(error_count, 5) * 0.02)
-        factors = [
-            f"{len(supporting)} successful evidence records",
-            f"{source_count} enrichment sources",
-            f"{ioc_count} IOC(s) with evidence",
-        ]
-        if error_count:
-            factors.append(f"{error_count} error/skipped records excluded from supporting evidence")
-        return round(confidence, 3), factors
+        return agent_evidence.derive_investigation_confidence(
+            supporting, all_normalized
+        )
 
     def _has_successful_normalized_evidence(self, state: Mapping[str, Any]) -> bool:
-        normalized = list(state.get("normalized_evidence") or [])
-        if not normalized:
-            normalized = [
-                self.normalize_tool_result(result)
-                for result in state.get("tool_results", []) or []
-            ]
-        return any(self._normalized_evidence_succeeded(item) for item in normalized)
+        return agent_evidence.has_successful_normalized_evidence(
+            state, self.normalize_tool_result
+        )
 
     def _normalized_evidence_succeeded(self, evidence: Mapping[str, Any]) -> bool:
-        if evidence.get("verdict") == "error":
-            return False
-        if str(evidence.get("raw_status") or "").lower() in {"skipped", "error"}:
-            return False
-        return bool(evidence.get("ioc"))
+        return agent_evidence.normalized_evidence_succeeded(evidence)
 
     def _coerce_confidence(self, value: Any, default: float) -> float:
-        try:
-            numeric = float(value)
-        except (TypeError, ValueError):
-            return default
-        if numeric > 1.0:
-            numeric = numeric / 100.0
-        return max(0.0, min(numeric, 1.0))
+        return agent_evidence.coerce_confidence(value, default)
 
     def _present_values(self, values: List[Any]) -> List[str]:
-        return [str(value) for value in values if value not in (None, "", [], {})]
+        return agent_evidence.present_values(values)
 
     def _tool_result_raw_reference(
         self, tool_result: Mapping[str, Any], source: str, ioc: str
     ) -> str:
-        timestamp = tool_result.get("timestamp") or "no_timestamp"
-        return f"{source}:{ioc or 'unknown'}:{timestamp}"
+        return agent_evidence.tool_result_raw_reference(tool_result, source, ioc)
 
     def _agent_trace_event(self, stage: str, action: str, detail: str) -> Dict[str, Any]:
         return {
@@ -1340,104 +497,74 @@ class DFIRAgent:
             "detail": detail,
         }
 
+    def _emit_terminal(
+        self,
+        line: str,
+        *,
+        stage: str = "ai_agent",
+        progress: int | None = None,
+        level: str = "info",
+    ) -> None:
+        """Emit safe observable agent telemetry for the frontend terminal."""
+        if not self.telemetry_callback or not self.session_id:
+            return
+        self.telemetry_callback(
+            self.session_id,
+            stage,
+            line,
+            progress=progress,
+            level=level,
+        )
+
     def _select_follow_up_tool_calls(
         self, state: InvestigationState
     ) -> List[Dict[str, Any]]:
         """Select unqueried enrichment tools for IOCs with suspicious observations."""
-        iocs = state.get("iocs_extracted") or []
-        follow_up_ioc_keys = self._follow_up_ioc_keys(state)
-        if not iocs or not follow_up_ioc_keys:
-            return []
-
-        candidate_iocs = [
-            ioc
-            for ioc in iocs
-            if (
-                str(ioc.get("type", "")).lower(),
-                str(ioc.get("value", "")),
-            )
-            in follow_up_ioc_keys
-        ]
-        attempted_keys = self._attempted_tool_call_keys(state)
-        selected_calls = []
-        selected_keys = set()
-
-        for call in self._fallback_tool_selection(candidate_iocs):
-            key = self._tool_call_key(call)
-            if key in attempted_keys or key in selected_keys:
-                continue
-            selected_calls.append(call)
-            selected_keys.add(key)
-
-        return selected_calls
+        return agent_tooling.select_follow_up_tool_calls(
+            state,
+            self.STATIC_FALLBACK_TOOLS,
+            self.TOOL_RESULT_ALIASES,
+            self._identify_ioc_type,
+            self._is_malicious_tool_result,
+            self._is_suspicious_tool_result,
+        )
 
     def _follow_up_ioc_keys(self, state: InvestigationState) -> set[tuple[str, str]]:
         """Return IOC keys that deserve another enrichment round."""
-        keys = set()
-        for result in state.get("tool_results") or []:
-            if not (
-                self._is_malicious_tool_result(result)
-                or self._is_suspicious_tool_result(result)
-            ):
-                continue
-
-            ioc_value = self._extract_tool_result_ioc(result)
-            if not ioc_value:
-                continue
-
-            ioc_type = str(result.get("ioc_type") or "").lower()
-            if not ioc_type:
-                ioc_type = self._identify_ioc_type(ioc_value) or ""
-            if ioc_type:
-                keys.add((ioc_type, str(ioc_value)))
-
-        return keys
+        return agent_tooling.follow_up_ioc_keys(
+            state,
+            self._identify_ioc_type,
+            self._is_malicious_tool_result,
+            self._is_suspicious_tool_result,
+        )
 
     def _attempted_tool_call_keys(
         self, state: InvestigationState
     ) -> set[tuple[str, str, str]]:
         """Return tool/IOC combinations that already produced an observation."""
-        keys = set()
-        for result in state.get("tool_results") or []:
-            key = self._tool_result_key(result)
-            if key:
-                keys.add(key)
-        return keys
+        return agent_tooling.attempted_tool_call_keys(
+            state,
+            self.TOOL_RESULT_ALIASES,
+            self._identify_ioc_type,
+        )
 
     def _tool_call_key(self, call: Mapping[str, Any]) -> tuple[str, str, str]:
-        tool_name = self._normalize_tool_name(call.get("tool"))
-        ioc_type = str(call.get("ioc_type") or "").lower()
-        ioc_value = str(call.get("ioc") or "")
-        return (tool_name, ioc_type, ioc_value)
+        return agent_tooling.tool_call_key(call, self.TOOL_RESULT_ALIASES)
 
     def _tool_result_key(
         self, result: Mapping[str, Any]
     ) -> Optional[tuple[str, str, str]]:
-        tool_name = self._normalize_tool_name(
-            result.get("tool_call") or result.get("tool")
+        return agent_tooling.tool_result_key(
+            result,
+            self.TOOL_RESULT_ALIASES,
+            self._identify_ioc_type,
         )
-        ioc_value = self._extract_tool_result_ioc(result)
-        ioc_type = str(result.get("ioc_type") or "").lower()
-        if not ioc_type and ioc_value:
-            ioc_type = self._identify_ioc_type(ioc_value) or ""
-
-        if not tool_name or not ioc_type or not ioc_value:
-            return None
-        return (tool_name, ioc_type, str(ioc_value))
 
     def _normalize_tool_name(self, tool_name: Any) -> str:
-        normalized = str(tool_name or "").strip().lower()
-        return self.TOOL_RESULT_ALIASES.get(normalized, normalized)
+        return agent_tooling.normalize_tool_name(tool_name, self.TOOL_RESULT_ALIASES)
 
     def _extract_tool_result_ioc(self, result: Mapping[str, Any]) -> str:
-        return str(
-            result.get("ioc")
-            or result.get("ip")
-            or result.get("domain")
-            or result.get("url")
-            or result.get("hash")
-            or ""
-        )
+        return agent_tooling.extract_tool_result_ioc(result)
 
     def _coerce_int(self, value: Any, default: int) -> int:
         try:
@@ -1461,6 +588,15 @@ class DFIRAgent:
         print(
             "Correlating threat intel findings with anomalies using ReAct reasoning..."
         )
+        self._emit_terminal(
+            "=" * 60 + "\nSTAGE 4: CORRELATION ANALYSIS\n" + "=" * 60,
+            progress=77,
+            level="stage",
+        )
+        self._emit_terminal(
+            "Correlating threat intel findings with anomalies using ReAct workflow...",
+            progress=77,
+        )
 
         tool_results = state["tool_results"]
         anomalies = state["anomalies"]
@@ -1471,11 +607,18 @@ class DFIRAgent:
         print(
             f"  - Malicious IOCs: {sum(1 for r in tool_results if r.get('malware_family'))}"
         )
+        malicious_count = sum(1 for r in tool_results if r.get("malware_family"))
+        self._emit_terminal(
+            f"Input data:\n  - Anomalies: {len(anomalies)}\n  - Tool results: {len(tool_results)}\n  - Malicious IOCs: {malicious_count}",
+            progress=77,
+        )
 
         # Create correlation prompt
         prompt = self._create_correlation_prompt(anomalies, tool_results)
         print(f"\nPrompt length: {len(prompt)} chars")
         print("Sending correlation request to LLM...")
+        self._emit_terminal(f"Prompt length: {len(prompt)} chars", progress=77)
+        self._emit_terminal("Sending correlation request to LLM...", progress=77)
 
         try:
             import time
@@ -1486,6 +629,11 @@ class DFIRAgent:
 
             print(f"\n[OK] LLM Correlation Analysis Complete ({elapsed:.2f}s)")
             print("=" * 60)
+            self._emit_terminal(
+                f"[OK] LLM Correlation Analysis Complete ({elapsed:.2f}s)",
+                progress=78,
+                level="success",
+            )
             print("CORRELATION ANALYSIS RESULT:")
             print("=" * 60)
             print(response[:800] + ("..." if len(response) > 800 else ""))
@@ -1501,6 +649,11 @@ class DFIRAgent:
 
         except Exception as e:
             print(f"[WARN] Error in correlation: {e}")
+            self._emit_terminal(
+                f"[WARN] Error in correlation: {e}",
+                progress=78,
+                level="warning",
+            )
             import traceback
 
             print(traceback.format_exc())
@@ -1526,6 +679,11 @@ class DFIRAgent:
             )
 
         print("\n=== STAGE 4B: POST-CORRELATION REFLECTION ===")
+        self._emit_terminal(
+            "=" * 60 + "\nSTAGE 4B: POST-CORRELATION REFLECTION\n" + "=" * 60,
+            progress=79,
+            level="stage",
+        )
 
         current_round = self._coerce_int(state.get("reflection_round"), 0)
         max_rounds = self._coerce_int(
@@ -1536,6 +694,7 @@ class DFIRAgent:
         if not state.get("iocs_extracted"):
             assessment = "Reflection skipped because no IOCs were extracted."
             print(assessment)
+            self._emit_terminal(assessment, progress=79, level="warning")
             return {
                 "post_correlation_follow_up_calls": [],
                 "observation_assessment": assessment,
@@ -1549,6 +708,7 @@ class DFIRAgent:
                 "Reflection loop limit reached; continuing with available evidence."
             )
             print(assessment)
+            self._emit_terminal(assessment, progress=79, level="warning")
             return {
                 "post_correlation_follow_up_calls": [],
                 "observation_assessment": assessment,
@@ -1569,6 +729,7 @@ class DFIRAgent:
                     "no new follow-up calls selected."
                 )
             print(assessment)
+            self._emit_terminal(assessment, progress=79, level="success")
             return {
                 "post_correlation_follow_up_calls": follow_up_calls,
                 "observation_assessment": assessment,
@@ -1582,6 +743,7 @@ class DFIRAgent:
                 f"Reflection failed open due to error: {e}; continuing with available evidence."
             )
             print(f"[WARN] {assessment}")
+            self._emit_terminal(f"[WARN] {assessment}", progress=79, level="warning")
             return {
                 "post_correlation_follow_up_calls": [],
                 "observation_assessment": assessment,
@@ -1593,31 +755,14 @@ class DFIRAgent:
 
     def _decide_post_correlation_step(self, state: InvestigationState) -> str:
         """Route after reflection without changing the existing tool-executor router."""
-        if not state.get("iocs_extracted"):
-            print("Reflection routing: no_iocs")
-            return "no_iocs"
-
-        current_round = self._coerce_int(state.get("reflection_round"), 0)
-        max_rounds = self._coerce_int(
-            state.get("max_reflection_rounds"), self.DEFAULT_MAX_REFLECTION_ROUNDS
+        decision = agent_routing.decide_post_correlation_step(
+            state,
+            default_max_reflection_rounds=self.DEFAULT_MAX_REFLECTION_ROUNDS,
+            coerce_int=self._coerce_int,
+            select_new_reflection_tool_calls=self._select_new_reflection_tool_calls,
         )
-        if current_round > max_rounds:
-            print(
-                "Reflection routing: sufficient_after_reflection "
-                f"(limit reached: {current_round}/{max_rounds})"
-            )
-            return "sufficient_after_reflection"
-
-        follow_up_calls = self._select_new_reflection_tool_calls(state)
-        if follow_up_calls:
-            print(
-                "Reflection routing: more_intel_needed "
-                f"({len(follow_up_calls)} targeted follow-up calls)"
-            )
-            return "more_intel_needed"
-
-        print("Reflection routing: sufficient_after_reflection")
-        return "sufficient_after_reflection"
+        self._emit_terminal(f"Reflection routing: {decision}", progress=79)
+        return decision
 
     def _correlation_requires_follow_up(
         self, state: InvestigationState
@@ -1672,59 +817,11 @@ class DFIRAgent:
 
     def context_only_summary(self, state: InvestigationState) -> Dict[str, Any]:
         """Finish safely when anomaly context exists but no valid IOC was extracted."""
-        anomaly_count = len(state.get("anomalies") or [])
-        reason = "No valid IOC was extracted from the anomalous log context."
-        summary = (
-            f"Investigasi bersifat inconclusive: {anomaly_count} window anomali tersedia, "
-            "tetapi tidak ada IOC valid untuk enrichment threat intelligence. "
-            "Kesimpulan malicious tidak dibuat tanpa bukti IOC atau korelasi eksternal."
-        )
-        recommendations = [
-            "Lakukan review manual pada raw log di window anomali prioritas untuk mencari host, user, process tree, command line, dan koneksi jaringan.",
-            "Korelasikan event dengan sumber internal seperti EDR, DNS, proxy, firewall, dan asset inventory sebelum eskalasi insiden.",
-        ]
-        return {
-            "investigation_summary": summary,
-            "recommendations": recommendations,
-            "investigation_status": "inconclusive",
-            "investigation_confidence": 0.0,
-            "confidence_factors": [reason],
-            "supporting_evidence": [],
-            "inconclusive_reason": reason,
-            "current_stage": "completed",
-            "completed": True,
-            "reasoning_steps": [reason],
-            "agent_trace": [
-                self._agent_trace_event("context_only_summary", "completed", reason)
-            ],
-        }
+        return agent_reporting.context_only_summary(self, state)
 
     def inconclusive_correlation(self, state: InvestigationState) -> Dict[str, Any]:
         """Set a safe inconclusive state when enrichment produced no usable evidence."""
-        reason = "Threat-intel enrichment returned no successful non-skipped evidence."
-        summary = (
-            "Investigasi bersifat inconclusive: IOC berhasil diekstrak, tetapi lookup threat intelligence "
-            "tidak menghasilkan evidence sukses yang dapat dijadikan dasar supporting evidence. "
-            "Tidak ada klaim malicious/benign final tanpa validasi manual tambahan."
-        )
-        recommendations = self._generate_default_recommendations(state) + [
-            "Ulangi enrichment dengan API key/sumber internal yang tersedia dan dokumentasikan tool yang gagal atau dilewati.",
-            "Validasi IOC terhadap telemetry lokal sebelum membuat keputusan containment atau closure.",
-        ]
-        return {
-            "correlation_analysis": summary,
-            "investigation_status": "inconclusive",
-            "investigation_confidence": 0.0,
-            "confidence_factors": [reason],
-            "supporting_evidence": [],
-            "inconclusive_reason": reason,
-            "recommendations": recommendations[:10],
-            "current_stage": "inconclusive_correlation_complete",
-            "reasoning_steps": [reason],
-            "agent_trace": [
-                self._agent_trace_event("inconclusive_correlation", "completed", reason)
-            ],
-        }
+        return agent_reporting.inconclusive_correlation(self, state)
 
     def build_timeline(self, state: InvestigationState) -> Dict[str, Any]:
         """
@@ -1736,69 +833,20 @@ class DFIRAgent:
             )
 
         print("\n=== STAGE 5: TIMELINE CONSTRUCTION ===")
+        self._emit_terminal(
+            "=" * 60 + "\nSTAGE 5: TIMELINE CONSTRUCTION\n" + "=" * 60,
+            progress=80,
+            level="stage",
+        )
 
-        anomalies = state["anomalies"]
-        parsed_logs = state["parsed_logs"]
-
-        timeline = []
-        supporting_by_ioc = {
-            (str(item.get("ioc_type") or "").lower(), str(item.get("ioc") or "")): item
-            for item in state.get("supporting_evidence", []) or []
-        }
-
-        for anomaly in anomalies:
-            start_idx = anomaly["start_idx"]
-
-            # Get representative log from window
-            if start_idx < len(parsed_logs):
-                log_entry = parsed_logs.iloc[start_idx]
-
-                window_id = anomaly["window_id"]
-                window_iocs = [
-                    ioc
-                    for ioc in state.get("iocs_extracted", []) or []
-                    if ioc.get("window_id") == window_id
-                ]
-                threat_evidence = []
-                for ioc in window_iocs:
-                    evidence = supporting_by_ioc.get(
-                        (str(ioc.get("type") or "").lower(), str(ioc.get("value") or ""))
-                    )
-                    if evidence:
-                        threat_evidence.append(evidence)
-                confidence = max(
-                    [float(item.get("confidence") or 0.0) for item in threat_evidence]
-                    or [0.0]
-                )
-                event_template = anomaly["actual_event"]
-                description = self._build_timeline_description(anomaly)
-                timeline.append(
-                    {
-                        "window_id": window_id,
-                        "timestamp": self._resolve_timeline_timestamp(log_entry, anomaly),
-                        "event": event_template,
-                        "event_template": event_template,
-                        "severity": "high" if anomaly.get("is_anomaly") else "normal",
-                        "description": description,
-                        "details": description,
-                        "log_evidence": {
-                            "window_id": window_id,
-                            "event_id": log_entry.get("event_id"),
-                            "event_template": event_template,
-                        },
-                        "ioc": window_iocs,
-                        "threat_evidence": threat_evidence,
-                        "interpretation": self._timeline_interpretation(threat_evidence),
-                        "confidence": round(confidence, 3),
-                        "source_window": window_id,
-                        "evidence_reference": f"window:{window_id}",
-                    }
-                )
-
-        # Sort by window_id (chronological)
-        timeline.sort(key=lambda x: x["window_id"])
+        timeline = agent_timeline.build_attack_timeline(state)
 
         print(f"Built timeline with {len(timeline)} events")
+        self._emit_terminal(
+            f"Built timeline with {len(timeline)} events",
+            progress=82,
+            level="success",
+        )
 
         return {
             "attack_timeline": timeline,
@@ -1811,1040 +859,120 @@ class DFIRAgent:
         """
         Node: Generate final investigation summary using LLM
         """
-        if self.status_callback and self.session_id:
-            self.status_callback(
-                self.session_id, "ai_agent", "AI sedang menulis summary...", 83
-            )
-
-        print("\n=== STAGE 6: REPORT GENERATION ===")
-        print("Generating comprehensive investigation summary with LLM...")
-
-        if state.get("investigation_status") == "inconclusive":
-            reason = state.get("inconclusive_reason") or "Evidence was insufficient for a conclusive verdict."
-            summary = state.get("correlation_analysis") or state.get("investigation_summary") or (
-                "Investigasi bersifat inconclusive karena evidence yang tersedia belum cukup untuk membuat verdict ancaman final."
-            )
-            recommendations = state.get("recommendations") or self._generate_default_recommendations(state)
-            return {
-                "investigation_summary": summary,
-                "recommendations": recommendations,
-                "investigation_status": "inconclusive",
-                "investigation_confidence": float(state.get("investigation_confidence") or 0.0),
-                "confidence_factors": state.get("confidence_factors") or [reason],
-                "supporting_evidence": state.get("supporting_evidence") or [],
-                "inconclusive_reason": reason,
-                "current_stage": "completed",
-                "completed": True,
-                "reasoning_steps": ["Generated safe inconclusive summary without overclaiming"],
-                "agent_trace": [
-                    self._agent_trace_event("report_generator", "inconclusive_summary", reason)
-                ],
-            }
-
-        # Create report generation prompt
-        prompt = self._create_report_prompt(state)
-        print(f"Prompt length: {len(prompt)} chars")
-        print("Sending report generation request to LLM...")
-
-        try:
-            import time
-
-            start_time = time.time()
-            response = self.llm.invoke(prompt)
-            elapsed = time.time() - start_time
-
-            print(f"\n[OK] Investigation Summary Generated ({elapsed:.2f}s)")
-            print("-" * 60)
-            print(response[:500] + ("..." if len(response) > 500 else ""))
-            print("-" * 60)
-
-            # Extract recommendations from LLM response
-            recommendations = self._extract_recommendations(response)
-
-            # If extraction fails, use intelligent defaults based on findings
-            if not recommendations:
-                recommendations = self._generate_default_recommendations(state)
-
-            print(f"\nExtracted Recommendations: {len(recommendations)} items")
-            for idx, rec in enumerate(recommendations[:5], 1):
-                print(f"  {idx}. {rec[:80]}...")
-
-            return {
-                "investigation_summary": response,
-                "recommendations": recommendations,
-                "investigation_status": state.get("investigation_status") or "completed",
-                "investigation_confidence": float(state.get("investigation_confidence") or 0.0),
-                "confidence_factors": state.get("confidence_factors") or [],
-                "supporting_evidence": state.get("supporting_evidence") or [],
-                "inconclusive_reason": state.get("inconclusive_reason") or "",
-                "current_stage": "completed",
-                "completed": True,
-                "reasoning_steps": [
-                    "Generated comprehensive executive summary with ReAct reasoning"
-                ],
-                "agent_trace": [
-                    self._agent_trace_event("report_generator", "completed", "Generated investigation summary")
-                ],
-            }
-
-        except Exception as e:
-            print(f"[WARN] Error generating summary: {e}")
-            import traceback
-
-            print(traceback.format_exc())
-            return {
-                "investigation_summary": f"Error generating summary: {e}",
-                "recommendations": self._generate_default_recommendations(state),
-                "investigation_status": "inconclusive",
-                "investigation_confidence": float(state.get("investigation_confidence") or 0.0),
-                "confidence_factors": state.get("confidence_factors") or ["Summary generation failed"],
-                "supporting_evidence": state.get("supporting_evidence") or [],
-                "inconclusive_reason": f"Summary generation failed: {e}",
-                "current_stage": "error",
-                "completed": True,
-            }
+        return agent_reporting.generate_summary(self, state)
 
     def _extract_recommendations(self, llm_response: str) -> List[str]:
-        """Extract recommendations from LLM response"""
-        recommendations = []
-
-        # Look for recommendations section
-        recommendation_header = re.compile(
-            r"\b(REKOMENDASI|RECOMMENDATIONS?|TINDAKAN\s+PERBAIKAN|LANGKAH\s+PERBAIKAN|LANGKAH\s+MITIGASI)\b",
-            re.IGNORECASE,
-        )
-        if recommendation_header.search(llm_response):
-            lines = llm_response.split("\n")
-            in_recommendations = False
-
-            for line in lines:
-                # Start capturing
-                if recommendation_header.search(line):
-                    in_recommendations = True
-                    continue
-
-                # Stop at next major section
-                if in_recommendations and line.strip().startswith("#"):
-                    break
-
-                # Capture numbered or bulleted items
-                if in_recommendations:
-                    stripped = line.strip()
-                    if stripped and (
-                        stripped[0].isdigit() or stripped.startswith(("-", "•", "*"))
-                    ):
-                        # Clean up numbering
-                        rec = stripped.lstrip("0123456789.-•* ")
-                        if len(rec) > 10:  # Meaningful recommendation
-                            recommendations.append(rec)
-
-        return recommendations[:10]  # Max 10 recommendations
+        """Extract recommendations from LLM response."""
+        return agent_recommendations.extract_recommendations(llm_response)
 
     def _generate_default_recommendations(self, state: Mapping[str, Any]) -> List[str]:
         """Generate evidence-based fallback recommendations from current findings."""
-        anomalies = state.get("anomalies", []) or []
-        tool_results = state.get("tool_results", []) or []
-        iocs = state.get("iocs_extracted", []) or []
-        timeline = state.get("attack_timeline", []) or []
-        recommendations = []
-
-        malicious_results = [
-            result for result in tool_results if self._is_malicious_tool_result(result)
-        ]
-        suspicious_results = [
-            result
-            for result in tool_results
-            if not self._is_malicious_tool_result(result)
-            and self._is_suspicious_tool_result(result)
-        ]
-        priority_anomaly = self._select_priority_anomaly(anomalies)
-        anomaly_context = self._format_anomaly_recommendation_context(priority_anomaly)
-        artifact_context = self._format_anomaly_artifacts(priority_anomaly)
-        top_iocs = self._format_ioc_sample(iocs)
-
-        if malicious_results:
-            recommendations.append(
-                f"Segera containment aset yang terkait dengan IOC malicious {self._format_tool_result_targets(malicious_results[:5])}; korelasikan dengan {anomaly_context}."
-            )
-            recommendations.append(
-                "Blokir IOC malicious pada firewall, proxy, DNS sinkhole, EDR, dan SIEM lalu hunt kemunculan ulang pada host lain."
-            )
-
-        if suspicious_results:
-            recommendations.append(
-                f"Validasi IOC suspicious {self._format_tool_result_targets(suspicious_results[:5])} menggunakan log internal sebelum menaikkan verdict menjadi confirmed incident."
-            )
-
-        if priority_anomaly:
-            recommendations.append(
-                f"Triase {anomaly_context}; periksa raw log, process tree, user, parent process, command line, dan event sebelum/sesudah window tersebut."
-            )
-
-        if artifact_context:
-            recommendations.append(
-                f"Kumpulkan artefak forensik yang relevan dengan {artifact_context}, termasuk event log lengkap, prefetch/process execution, registry autorun, dan koneksi jaringan."
-            )
-
-        if top_iocs and not malicious_results:
-            recommendations.append(
-                f"Enrich dan korelasikan IOC terkurasi {top_iocs} dengan EDR, DNS, proxy, asset inventory, dan threat intelligence tambahan."
-            )
-
-        if timeline:
-            recommendations.append(
-                f"Gunakan {len(timeline)} item timeline untuk memastikan urutan kejadian dan menentukan apakah aktivitas ini merupakan chain serangan atau anomali terpisah."
-            )
-
-        if anomalies and not malicious_results and not suspicious_results:
-            recommendations.append(
-                f"Validasi {len(anomalies)} anomali DeepLog terhadap baseline operasional; jangan langsung tuning model sebelum window prioritas dan artefaknya dinyatakan false positive."
-            )
-
-        if not recommendations:
-            recommendations.append(
-                "Tidak ada deteksi prioritas yang cukup kuat; simpan hasil sebagai baseline dan lanjutkan monitoring pada pola log yang sama."
-            )
-
-        return recommendations[:10]
+        return agent_recommendations.generate_default_recommendations(
+            state,
+            self._summarize_anomaly_details,
+        )
 
     def _is_malicious_tool_result(self, result: Dict[str, Any]) -> bool:
-        if not result or result.get("status") == "skipped" or result.get("skipped"):
-            return False
-        return (
-            result.get("classification") == "malicious"
-            or bool(result.get("malware_family"))
-            or self._safe_positive_count(result.get("malicious")) > 0
-        )
+        return agent_recommendations.is_malicious_tool_result(result)
 
     def _is_suspicious_tool_result(self, result: Dict[str, Any]) -> bool:
-        if not result or result.get("status") == "skipped" or result.get("skipped"):
-            return False
-        return (
-            result.get("classification") == "suspicious"
-            or self._safe_positive_count(result.get("suspicious")) > 0
-        )
+        return agent_recommendations.is_suspicious_tool_result(result)
 
     def _safe_positive_count(self, value: Any) -> int:
-        try:
-            return max(int(value or 0), 0)
-        except (TypeError, ValueError):
-            return 0
+        return agent_recommendations.safe_positive_count(value)
 
     def _select_priority_anomaly(self, anomalies: List[Dict[str, Any]]) -> Dict[str, Any]:
-        if not anomalies:
-            return {}
-
-        def priority(anomaly: Dict[str, Any]):
-            score = anomaly.get("anomaly_score") or anomaly.get("score") or 0
-            try:
-                numeric_score = float(score)
-            except (TypeError, ValueError):
-                numeric_score = 0.0
-            return numeric_score, int(bool(anomaly.get("strict_is_anomaly")))
-
-        return max(anomalies, key=priority)
+        return agent_recommendations.select_priority_anomaly(anomalies)
 
     def _format_anomaly_recommendation_context(self, anomaly: Dict[str, Any]) -> str:
-        if not anomaly:
-            return "window anomali prioritas"
-
-        parts = [f"window DeepLog {anomaly.get('window_id', '-')}"]
-        score = anomaly.get("anomaly_score") or anomaly.get("score")
-        if score is not None:
-            try:
-                parts.append(f"score {float(score):.3f}")
-            except (TypeError, ValueError):
-                parts.append(f"score {score}")
-
-        event = str(anomaly.get("actual_event") or "").strip()
-        if event:
-            parts.append(f"event `{event[:120]}`")
-
-        return " / ".join(parts)
+        return agent_recommendations.format_anomaly_recommendation_context(anomaly)
 
     def _format_anomaly_artifacts(self, anomaly: Dict[str, Any]) -> str:
-        if not anomaly:
-            return ""
-        return self._summarize_anomaly_details(anomaly)
+        return agent_recommendations.format_anomaly_artifacts(
+            anomaly,
+            self._summarize_anomaly_details,
+        )
 
     def _format_tool_result_targets(self, results: List[Dict[str, Any]]) -> str:
-        targets = []
-        for result in results:
-            target = (
-                result.get("ioc")
-                or result.get("ip")
-                or result.get("url")
-                or result.get("hash")
-            )
-            if target:
-                targets.append(f"`{target}`")
-        return ", ".join(targets) if targets else "yang ditemukan threat intelligence"
+        return agent_recommendations.format_tool_result_targets(results)
 
     def _format_ioc_sample(self, iocs: List[Dict[str, Any]]) -> str:
-        values = []
-        for ioc in iocs[:5]:
-            value = ioc.get("value")
-            ioc_type = ioc.get("type", "ioc")
-            if value:
-                values.append(f"{ioc_type} `{value}`")
-        return ", ".join(values)
+        return agent_recommendations.format_ioc_sample(iocs)
 
     def _extract_severity(self, llm_response: str) -> str:
         """Extract severity classification from LLM response"""
-        severity_terms = [
-            ("CRITICAL", r"\b(CRITICAL|KRITIS)\b"),
-            ("HIGH", r"\b(HIGH|TINGGI)\b"),
-            ("MEDIUM", r"\b(MEDIUM|SEDANG)\b"),
-            ("LOW", r"\b(LOW|RENDAH)\b"),
-        ]
-        negation_pattern = re.compile(
-            r"\b(no|not|none|without|tidak|bukan|tanpa|nihil)\b", re.IGNORECASE
-        )
-
-        severity_lines = [
-            line
-            for line in llm_response.splitlines()
-            if re.search(r"\b(severity|tingkat\s+keparahan|risk\s+level)\b", line, re.IGNORECASE)
-        ]
-        search_spaces = severity_lines or llm_response.splitlines() or [llm_response]
-        for text in search_spaces:
-            for severity, pattern in severity_terms:
-                match = re.search(pattern, text, flags=re.IGNORECASE)
-                if not match:
-                    continue
-                prefix = text[max(0, match.start() - 24) : match.start()]
-                if negation_pattern.search(prefix):
-                    continue
-                return severity
-
-        # Default based on malicious IOCs count
-        return "MEDIUM"
+        return agent_recommendations.extract_severity(llm_response)
 
     # === Helper Methods ===
 
     def _identify_ioc_type(self, value: str) -> Optional[str]:
         """Identify type of IOC"""
-        normalized_value = str(value or "").strip()
-        if not normalized_value:
-            return None
-
-        lowered = normalized_value.lower()
-
-        try:
-            ip_address(normalized_value)
-            return "ip"
-        except ValueError:
-            pass
-
-        if normalized_value.startswith(("http://", "https://")):
-            parsed_url = urlparse(normalized_value)
-            if parsed_url.scheme and parsed_url.netloc:
-                return "url"
-
-        if re.fullmatch(r"[a-fA-F0-9]{64}", normalized_value):
-            return "sha256"
-
-        if re.fullmatch(r"[a-fA-F0-9]{32}", normalized_value):
-            return "md5"
-
-        if any(char in normalized_value for char in ("\\", "/", ":", " ")):
-            return None
-
-        if self._looks_like_filename(lowered):
-            return None
-
-        if self._looks_like_script_token(normalized_value):
-            return None
-
-        if re.fullmatch(r"([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,63}", normalized_value):
-            return "domain"
-
-        return None
+        return agent_ioc.identify_ioc_type(value, self.EXECUTABLE_FILE_EXTENSIONS)
 
     def _looks_like_filename(self, value: str) -> bool:
-        file_suffix = Path(value).suffix.lower()
-        if file_suffix in self.EXECUTABLE_FILE_EXTENSIONS:
-            return True
-        return value in {"localhost", "localdomain"}
+        return agent_ioc.looks_like_filename(value, self.EXECUTABLE_FILE_EXTENSIONS)
 
     def _looks_like_script_token(self, value: str) -> bool:
-        parts = value.split(".")
-        if len(parts) < 2:
-            return False
-
-        if not all(re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", part) for part in parts):
-            return False
-
-        lowered_parts = [part.lower() for part in parts]
-        first_part = lowered_parts[0]
-        last_part = lowered_parts[-1]
-
-        if first_part in {"wscript", "cscript"} and last_part in {
-            "shell",
-            "createobject",
-            "network",
-        }:
-            return True
-
-        if first_part in {"objshell", "wshshell", "shell"} and last_part in {
-            "run",
-            "exec",
-            "expandenvironmentstrings",
-            "regread",
-            "regwrite",
-            "regdelete",
-            "specialfolders",
-            "environment",
-            "application",
-        }:
-            return True
-
-        if first_part == "scripting" and last_part == "filesystemobject":
-            return True
-
-        if first_part == "adodb" and last_part in {"stream", "connection", "recordset"}:
-            return True
-
-        if first_part.startswith("obj") and last_part in {"run", "exec"}:
-            return True
-
-        return False
+        return agent_ioc.looks_like_script_token(value)
 
     def _create_tool_selection_prompt(self, iocs: List[Dict[str, Any]]) -> str:
         """Create prompt for tool selection using full toolset."""
-        iocs_text = "\n".join(
-            [f"- {ioc['type'].upper()}: {ioc['value']}" for ioc in iocs[:15]]
-        )
-
-        prompt = f"""# DFIR Tool Selection - Threat Intel Framework
-
-Anda adalah Security Analyst TNI AL yang ahli dalam Digital Forensics & Incident Response.
-Tugas: pilih threat intelligence tools yang paling tepat untuk setiap IOC.
-
-## CONTEXT
-Total IOC Extracted: {len(iocs)}
-
-**IOC List:**
-{iocs_text}
-
-## AVAILABLE TOOLS
-
-1) threatfox_lookup
-- Input: IP/domain/url/hash
-- Kelebihan: IOC abuse.ch feed, malware family, threat type
-
-2) malwarebazaar_lookup
-- Input: MD5/SHA256 file hash
-- Kelebihan: file sample intel, signature, tags
-
-3) urlhaus_lookup
-- Input: URL saja
-- Kelebihan: URL malware hosting status dan payload context
-
-4) alienvault_otx_lookup
-- Input: IP/domain/url/hash
-- Kelebihan: pulse komunitas, reputasi, IOC relasi
-
-5) greynoise_lookup
-- Input: IP saja
-- Kelebihan: klasifikasi scanner/noise vs malicious
-
-6) virustotal_lookup
-- Input: IP/domain/url/file hash
-- Kelebihan: agregasi multi-engine reputation
-
-## MAPPING GUIDELINES
-- IP: prioritaskan greynoise_lookup dan threatfox_lookup; tambahkan alienvault_otx_lookup atau virustotal_lookup bila perlu reputasi tambahan.
-- Domain: prioritaskan threatfox_lookup, alienvault_otx_lookup, atau virustotal_lookup.
-- URL: prioritaskan urlhaus_lookup lalu threatfox_lookup atau virustotal_lookup.
-- MD5/SHA256: prioritaskan malwarebazaar_lookup lalu virustotal_lookup; threatfox_lookup dan alienvault_otx_lookup boleh dipakai sebagai pelengkap.
-
-## OUTPUT FORMAT
-Gunakan format ini (satu baris per pemanggilan tool):
-ip:192.168.1.100 -> greynoise_lookup
-ip:192.168.1.100 -> alienvault_otx_lookup
-domain:evil.com -> virustotal_lookup
-domain:evil.com -> threatfox_lookup
-sha256:abc123... -> virustotal_lookup
-sha256:abc123... -> malwarebazaar_lookup
-url:http://bad.com/payload.exe -> urlhaus_lookup
-
-Pilih 1-3 tools per IOC dan hanya gunakan nama tool dari daftar di atas."""
-        return prompt
+        return agent_prompts.create_tool_selection_prompt(iocs)
 
     def _parse_tool_selections(
         self, llm_response: str, iocs: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
         """Parse LLM response for tool selections"""
-        tool_calls = []
-        allowed_tools = set(self.TOOL_TO_IOC_TYPES)
-        valid_iocs = {
-            (str(ioc.get("type", "")).lower(), str(ioc.get("value", "")))
-            for ioc in iocs
-        }
-
-        lines = llm_response.split("\n")
-        for line in lines:
-            if "->" in line:
-                try:
-                    ioc_part, tool_name = line.split("->")
-                    ioc_type, ioc_value = ioc_part.strip().split(":", 1)
-                    ioc_type = ioc_type.strip().lower()
-                    ioc_value = ioc_value.strip()
-                    tool_name = tool_name.strip().lower()
-
-                    if tool_name not in allowed_tools:
-                        continue
-
-                    if ioc_type not in self.TOOL_TO_IOC_TYPES.get(tool_name, set()):
-                        continue
-
-                    if (ioc_type, ioc_value) not in valid_iocs:
-                        continue
-
-                    tool_calls.append(
-                        self._build_tool_call(
-                            ioc_value,
-                            ioc_type,
-                            tool_name,
-                            selection_source="llm",
-                            selection_reason="LLM selected supported tool for extracted IOC",
-                            expected_evidence="Provider reputation verdict, status, and detection counts where available",
-                        )
-                    )
-                except (TypeError, ValueError):
-                    continue
-
-        # If parsing failed, use fallback
-        if not tool_calls:
-            tool_calls = self._fallback_tool_selection(iocs)
-
-        return tool_calls
+        return agent_tooling.parse_tool_selections(
+            llm_response,
+            iocs,
+            self.TOOL_TO_IOC_TYPES,
+            self.STATIC_FALLBACK_TOOLS,
+            self.TOOL_RESULT_ALIASES,
+        )
 
     def _fallback_tool_selection(self, iocs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Fallback tool selection using simple heuristics"""
-        tool_calls = []
-
-        for ioc in iocs:
-            ioc_type = ioc["type"]
-            ioc_value = ioc["value"]
-
-            if ioc_type == "ip":
-                for tool_name in self.STATIC_FALLBACK_TOOLS["ip"]:
-                    tool_calls.append(
-                        self._build_tool_call(
-                            ioc_value,
-                            ioc_type,
-                            tool_name,
-                            selection_source="fallback_heuristic",
-                            selection_reason="IP IOC static enrichment playbook",
-                        )
-                    )
-            elif ioc_type == "domain":
-                for tool_name in self.STATIC_FALLBACK_TOOLS["domain"]:
-                    tool_calls.append(
-                        self._build_tool_call(
-                            ioc_value,
-                            ioc_type,
-                            tool_name,
-                            selection_source="fallback_heuristic",
-                            selection_reason="Domain IOC static enrichment playbook",
-                        )
-                    )
-            elif ioc_type == "url":
-                for tool_name in self.STATIC_FALLBACK_TOOLS["url"]:
-                    tool_calls.append(
-                        self._build_tool_call(
-                            ioc_value,
-                            ioc_type,
-                            tool_name,
-                            selection_source="fallback_heuristic",
-                            selection_reason="URL IOC static enrichment playbook",
-                        )
-                    )
-            elif ioc_type in ["md5", "sha256"]:
-                for tool_name in self.STATIC_FALLBACK_TOOLS[ioc_type]:
-                    tool_calls.append(
-                        self._build_tool_call(
-                            ioc_value,
-                            ioc_type,
-                            tool_name,
-                            selection_source="fallback_heuristic",
-                            selection_reason="Hash IOC static enrichment playbook",
-                        )
-                    )
-
-        return tool_calls
+        return agent_tooling.fallback_tool_selection(
+            iocs,
+            self.STATIC_FALLBACK_TOOLS,
+            self.TOOL_RESULT_ALIASES,
+        )
 
     def _build_timeline_description(self, anomaly: Dict[str, Any]) -> str:
-        detail_summary = self._summarize_anomaly_details(anomaly)
-        if detail_summary:
-            return (
-                f"Anomalous event detected: {anomaly.get('actual_event', 'unknown')} | "
-                f"{detail_summary}"
-            )
-        return f"Anomalous event detected: {anomaly.get('actual_event', 'unknown')}"
+        return agent_timeline.build_timeline_description(anomaly)
 
     def _timeline_interpretation(self, threat_evidence: List[Dict[str, Any]]) -> str:
-        if not threat_evidence:
-            return "Log anomaly requires manual review; no supporting IOC enrichment is linked to this timeline item."
-        verdicts = {str(item.get("verdict") or "unknown") for item in threat_evidence}
-        if "malicious" in verdicts:
-            return "Log anomaly is linked to malicious IOC enrichment evidence."
-        if "suspicious" in verdicts:
-            return "Log anomaly is linked to suspicious IOC enrichment evidence."
-        if "benign" in verdicts:
-            return "Linked IOC enrichment did not show a threat signal; keep as contextual evidence."
-        return "Linked IOC enrichment is available but inconclusive."
+        return agent_timeline.timeline_interpretation(threat_evidence)
 
     def _summarize_anomaly_details(self, anomaly: Dict[str, Any]) -> str:
-        key_fields = []
-
-        anomalous_line = anomaly.get("anomalous_line") or {}
-        if isinstance(anomalous_line, dict):
-            fields = anomalous_line.get("important_fields") or {}
-            if isinstance(fields, dict):
-                for key in [
-                    "image",
-                    "command_line",
-                    "parent_image",
-                    "target_object",
-                    "destination_ip",
-                    "destination_port",
-                    "query_name",
-                    "user",
-                ]:
-                    value = fields.get(key)
-                    if value:
-                        key_fields.append(f"{key}={value}")
-                    if len(key_fields) >= 4:
-                        break
-
-        if not key_fields:
-            indicators = anomaly.get("window_key_indicators") or {}
-            if isinstance(indicators, dict):
-                for key in [
-                    "image",
-                    "command_line",
-                    "target_object",
-                    "destination_ip",
-                    "query_name",
-                    "user",
-                ]:
-                    values = indicators.get(key) or []
-                    if values:
-                        key_fields.append(f"{key}={values[0]}")
-                    if len(key_fields) >= 4:
-                        break
-
-        return " | ".join(key_fields)
+        return agent_timeline.summarize_anomaly_details(anomaly)
 
     def _resolve_timeline_timestamp(
         self, log_entry: pd.Series, anomaly: Dict[str, Any]
     ) -> Optional[str]:
-        log_timestamp = str(log_entry.get("timestamp") or "").strip()
-        if log_timestamp:
-            return log_timestamp
-
-        anomalous_line = anomaly.get("anomalous_line") or {}
-        if isinstance(anomalous_line, dict):
-            anomaly_timestamp = str(anomalous_line.get("timestamp") or "").strip()
-            if anomaly_timestamp:
-                return anomaly_timestamp
-
-        return None
+        return agent_timeline.resolve_timeline_timestamp(log_entry, anomaly)
 
     def _create_correlation_prompt(
         self, anomalies: List[Dict[str, Any]], tool_results: List[Dict[str, Any]]
     ) -> str:
         """Create prompt for correlation using ReAct pattern"""
-        anomalies_summary = f"{len(anomalies)} anomali terdeteksi"
-        relevant_tool_results = [
-            result
-            for result in tool_results
-            if result.get("status") != "skipped" and not result.get("skipped")
-        ]
-
-        # Extract meaningful threat findings
-        threat_findings = []
-        malicious_count = 0
-        suspicious_count = 0
-
-        prioritized_tool_results = sorted(
-            relevant_tool_results,
-            key=lambda item: (
-                int(self._is_malicious_tool_result(item)),
-                int(self._is_suspicious_tool_result(item)),
-            ),
-            reverse=True,
+        return agent_prompts.create_correlation_prompt(
+            anomalies,
+            tool_results,
+            summarize_anomaly_details=self._summarize_anomaly_details,
+            is_malicious_tool_result=self._is_malicious_tool_result,
+            is_suspicious_tool_result=self._is_suspicious_tool_result,
+            safe_positive_count=self._safe_positive_count,
         )
-
-        for result in prioritized_tool_results[:30]:  # Analyze more results
-            if result.get("status") != "error":
-                tool_name = result.get("tool", "unknown")
-                ioc = result.get("ioc", "N/A")
-                status = result.get("status", "checked")
-
-                # Extract key intel. Raw provider data means a response is available;
-                # explicit verdict fields determine malicious/suspicious counts.
-                if self._is_malicious_tool_result(result):
-                    malicious_count += 1
-                    threat_findings.append(
-                        f"- **{tool_name}**: IOC `{ioc}` -> MALICIOUS | "
-                        f"Malware: {result.get('malware_family', 'unknown')} | "
-                        f"Threat: {result.get('threat_type', 'unknown')} | "
-                        f"Malicious detections: {self._safe_positive_count(result.get('malicious'))}"
-                    )
-                elif self._is_suspicious_tool_result(result):
-                    suspicious_count += 1
-                    threat_findings.append(
-                        f"- **{tool_name}**: IOC `{ioc}` -> SUSPICIOUS | "
-                        f"Classification: {result.get('classification', 'unknown')} | "
-                        f"Suspicious detections: {self._safe_positive_count(result.get('suspicious'))}"
-                    )
-                elif result.get("data"):
-                    threat_findings.append(
-                        f"- **{tool_name}**: IOC `{ioc}` -> Response available, no explicit threat signal | Status: {status}"
-                    )
-                else:
-                    threat_findings.append(
-                        f"- **{tool_name}**: IOC `{ioc}` -> Clean/Unknown"
-                    )
-
-        findings_text = (
-            "\n".join(threat_findings)
-            if threat_findings
-            else "Tidak ada temuan threat intelligence"
-        )
-
-        # Build detailed anomaly context
-        anomaly_details = []
-        for idx, anomaly in enumerate(anomalies[:10], 1):
-            detail_summary = self._summarize_anomaly_details(anomaly)
-            detail_suffix = f" | {detail_summary}" if detail_summary else ""
-            anomaly_details.append(
-                f"{idx}. Window {anomaly.get('window_id')}: "
-                f"{anomaly.get('actual_event', 'Unknown')[:80]}...{detail_suffix}"
-            )
-        anomaly_context = "\n".join(anomaly_details)
-
-        prompt = f"""# DFIR Correlation Analysis - ReAct Framework
-
-Anda adalah Lead DFIR Analyst TNI AL yang berpengalaman dalam cyber threat hunting.
-Tugas: Korelasikan temuan anomali dengan threat intelligence untuk membangun hypothesis serangan.
-
-## INPUT DATA
-
-### Anomaly Detection Results
-Total Anomalies: {len(anomalies)}
-**Anomaly Windows:**
-{anomaly_context}
-
-### Threat Intelligence Results
-Total Queries: {len(relevant_tool_results)}
-- **Malicious IOCs:** {malicious_count}
-- **Suspicious IOCs:** {suspicious_count}
-- **Clean/Unknown:** {len(relevant_tool_results) - malicious_count - suspicious_count}
-
-**Detailed Findings:**
-{findings_text}
-
-## REACT CORRELATION PROCESS
-
-### THOUGHT 1: Analyze Threat Landscape
-**Question:** Apa pola IOC yang teridentifikasi?
-- Apakah ada IOC malicious yang confirmed?
-- Malware family apa yang terlibat?
-- Apakah ada clustering IOC (multiple IOC dari satu source)?
-
-**Reasoning:** [Analisis pola threat intelligence]
-
-### THOUGHT 2: Map to Anomalies
-**Question:** Bagaimana IOC malicious berkorelasi dengan anomali log?
-- Apakah anomali terjadi di timeframe yang sama?
-- Apakah ada event sequence yang mencurigakan?
-- Pola apa yang menunjukkan serangan terkoordinasi?
-
-**Reasoning:** [Hubungkan IOC dengan anomaly windows]
-
-### THOUGHT 3: Construct Attack Hypothesis
-**Question:** Apa skenario serangan yang paling mungkin?
-- Vektor serangan awal (initial access)?
-- Teknik yang digunakan attacker?
-- Tujuan serangan (objective)?
-
-**Reasoning:** [Bangun hypothesis berdasarkan evidence]
-
-## OUTPUT REQUIREMENTS
-
-Provide structured correlation analysis in Bahasa Indonesia:
-
-### 1. THREAT SUMMARY (2-3 kalimat)
-Ringkas temuan threat intelligence dan tingkat ancaman.
-
-### 2. CORRELATION FINDINGS (3-5 poin)
-- Korelasi spesifik antara IOC malicious dengan anomali
-- Evidence linking (window ID, IOC, threat type)
-- Pattern identification
-
-### 3. ATTACK HYPOTHESIS (2-3 paragraf)
-- Kemungkinan attack vector
-- Teknik yang digunakan (jika teridentifikasi)
-- Attack progression/kill chain
-- Objective estimation
-
-### 4. CONFIDENCE ASSESSMENT
-- Overall confidence: High/Medium/Low
-- Key evidence supporting hypothesis
-- Gaps in analysis
-
-**IMPORTANT:**
-- Fokus pada IOC malicious dan suspicious
-- Gunakan evidence konkrit (window ID, IOC value, malware family)
-- Jika tidak ada IOC malicious, analisis apakah anomali adalah false positive atau threat belum teridentifikasi
-- Profesional dan faktual, hindari spekulasi berlebihan
-
-Begin correlation analysis:"""
-        return prompt
 
     def _create_report_prompt(self, state: InvestigationState) -> str:
         """Create prompt for comprehensive report generation using ReAct pattern"""
-        num_anomalies = len(state["anomalies"])
-        num_iocs = len(state["iocs_extracted"])
-        num_tools = len(state["tool_results"])
-
-        # Extract malicious IOCs
-        malicious_iocs = []
-        for result in state["tool_results"]:
-            if self._is_malicious_tool_result(result):
-                malicious_iocs.append(
-                    {
-                        "ioc": result.get("ioc", "N/A"),
-                        "type": result.get("ioc_type", "unknown"),
-                        "malware": result.get("malware_family", "Unknown"),
-                        "threat_type": result.get("threat_type", "Unknown"),
-                    }
-                )
-
-        # Get reasoning steps summary
-        reasoning_summary = "\n".join(
-            [f"- {step[:150]}" for step in state.get("reasoning_steps", [])[-5:]]
+        return agent_prompts.create_report_prompt(
+            state,
+            summarize_anomaly_details=self._summarize_anomaly_details,
+            is_malicious_tool_result=self._is_malicious_tool_result,
         )
-
-        # Get correlation analysis
-        correlation_analysis = state.get(
-            "correlation_analysis", "Correlation analysis not available"
-        )
-        correlation_preview = (
-            correlation_analysis[:1400] + "..."
-            if len(correlation_analysis) > 1400
-            else correlation_analysis
-        )
-
-        # Get timeline summary
-        timeline_events = state.get("attack_timeline", [])
-        timeline_summary = (
-            f"{len(timeline_events)} events"
-            if timeline_events
-            else "Timeline not constructed"
-        )
-
-        anomaly_details = []
-        for idx, anomaly in enumerate(state.get("anomalies", [])[:12], 1):
-            detail_summary = self._summarize_anomaly_details(anomaly)
-            detail_suffix = f" | {detail_summary}" if detail_summary else ""
-            anomaly_details.append(
-                f"{idx}. Window {anomaly.get('window_id', '-')}: "
-                f"event={anomaly.get('actual_event', 'Unknown')} | "
-                f"score={anomaly.get('anomaly_score', anomaly.get('score', 'N/A'))}"
-                f"{detail_suffix}"
-            )
-        anomaly_evidence = "\n".join(anomaly_details) if anomaly_details else "Tidak ada detail anomali tersedia."
-
-        timeline_details = []
-        for idx, event in enumerate(timeline_events[:12], 1):
-            timeline_details.append(
-                f"{idx}. timestamp={event.get('timestamp', 'N/A')} | "
-                f"event={event.get('event_template') or event.get('event') or 'Unknown'} | "
-                f"details={event.get('description') or event.get('details') or 'N/A'}"
-            )
-        timeline_evidence = "\n".join(timeline_details) if timeline_details else "Timeline belum terbentuk."
-
-        tool_result_details = []
-        for idx, result in enumerate(state.get("tool_results", [])[:30], 1):
-            tool_result_details.append(
-                f"{idx}. tool={result.get('tool', 'unknown')} | "
-                f"ioc={result.get('ioc') or result.get('ip') or result.get('url') or result.get('hash') or 'N/A'} | "
-                f"classification={result.get('classification', 'N/A')} | "
-                f"malicious={result.get('malicious', 'N/A')} | "
-                f"suspicious={result.get('suspicious', 'N/A')} | "
-                f"status={result.get('status', 'N/A')}"
-            )
-        tool_evidence = "\n".join(tool_result_details) if tool_result_details else "Tidak ada hasil threat intelligence tersedia."
-
-        prompt = f"""# DFIR Executive Summary Report - ReAct Framework
-
-Anda adalah Chief Security Officer TNI AL yang akan mempresentasikan hasil investigasi kepada stakeholder.
-Tugas: Buat laporan investigasi DFIR yang PANJANG, KAYA INFORMASI, COMPREHENSIVE, ACTIONABLE, dan PROFESIONAL.
-
-ATURAN OUTPUT WAJIB:
-- Jawab HANYA dalam Bahasa Indonesia formal.
-- Jangan membuat contoh log, IOC, timestamp, atau proses yang tidak ada di input.
-- Jika evidence tidak cukup, tulis "belum cukup bukti" dan jelaskan gap datanya.
-- Setiap klaim penting harus menyebut evidence: window ID, IOC, tool result, timeline, process/user/command line, atau anomaly score.
-- Panjang target minimal 900 kata jika data mencukupi. Prioritaskan informasi dan penjelasan dibanding kreativitas.
-- Output harus langsung berupa laporan final, bukan soal latihan, bukan template, dan bukan instruksi pengerjaan.
-
-## INVESTIGATION METRICS
-
-### Quantitative Data
-- **Total Anomalies Detected:** {num_anomalies} windows
-- **IOCs Extracted:** {num_iocs} indicators
-- **Threat Intelligence Queries:** {num_tools} API calls
-- **Malicious IOCs Confirmed:** {len(malicious_iocs)}
-- **Attack Timeline:** {timeline_summary}
-
-### Key Malicious IOCs
-{chr(10).join([f"- {ioc['type'].upper()}: {ioc['ioc']} -> {ioc['malware']} ({ioc['threat_type']})" for ioc in malicious_iocs[:5]]) if malicious_iocs else "No malicious IOCs confirmed"}
-
-### DeepLog Anomaly Evidence
-{anomaly_evidence}
-
-### Threat Intelligence Evidence
-{tool_evidence}
-
-### Timeline Evidence
-{timeline_evidence}
-
-### Correlation Analysis Summary
-{correlation_preview}
-
-### Investigation Reasoning Chain
-{reasoning_summary}
-
-## REACT REPORT GENERATION PROCESS
-
-### THOUGHT 1: Incident Classification
-**Question:** Apa tingkat severity insiden ini?
-- Berapa banyak IOC malicious terconfirm?
-- Apakah ada indikasi data exfiltration atau system compromise?
-- Seberapa besar scope dampak?
-
-**Classification Criteria:**
-- **CRITICAL:** Multiple confirmed malware, C2 communication, data exfiltration evidence
-- **HIGH:** Confirmed malware presence, suspicious IOCs, potential compromise
-- **MEDIUM:** Some suspicious activity, unclear threat, possible false positives
-- **LOW:** Mostly benign anomalies, no confirmed threats
-
-### THOUGHT 2: Attack Analysis
-**Question:** Apa yang sebenarnya terjadi?
-- Apa attack vector yang digunakan?
-- Teknik apa yang teridentifikasi (MITRE ATT&CK)?
-- Apakah ini targeted attack atau opportunistic?
-
-### THOUGHT 3: Impact Assessment
-**Question:** Apa dampak dan risikonya?
-- System/data apa yang terpengaruh?
-- Apakah attacker berhasil achieve objectives?
-- Apa risiko lanjutan jika tidak ditangani?
-
-### THOUGHT 4: Remediation Priority
-**Question:** Apa yang harus dilakukan immediately?
-- Isolation/containment?
-- IOC blocking?
-- Forensics collection?
-- System hardening?
-
-## OUTPUT REQUIREMENTS
-
-Generate comprehensive report dalam Bahasa Indonesia dengan struktur:
-
-### 1. RINGKASAN EKSEKUTIF (Executive Summary)
-**[3-4 paragraf profesional]**
-
-Paragraf 1: **Incident Overview**
-- Kapan investigasi dilakukan
-- Berapa anomali dan IOC ditemukan
-- Verdict: Apakah ini genuine threat atau false positive dominan
-
-Paragraf 2: **Threat Identification**
-- Malware family atau threat actor (jika teridentifikasi)
-- Attack vector dan teknik yang digunakan
-- IOC malicious yang terconfirm
-
-Paragraf 3: **Impact Assessment**
-- Scope compromise (jika ada)
-- Data/systems yang terpengaruh
-- Potential damage atau risk
-
-Paragraf 4: **Recommended Actions**
-- Immediate actions (containment)
-- Short-term mitigation
-- Long-term improvements
-
-### 2. TINGKAT SEVERITY
-**Classification:** [CRITICAL/HIGH/MEDIUM/LOW]
-**Confidence Level:** [High/Medium/Low]
-
-**Justification:** [2-3 kalimat explaining severity rating]
-
-### 3. INDIKATOR KOMPROMI UTAMA (Key IOCs)
-List 5-10 IOC paling penting dengan konteks:
-- IOC value
-- Type (IP/domain/hash/URL)
-- Threat classification
-- Recommended action (block/monitor/investigate)
-
-### 4. MITRE ATT&CK MAPPING (Jika Applicable)
-Map temuan ke MITRE ATT&CK Framework:
-- **Tactic:** [e.g., Initial Access, Execution, Persistence]
-- **Technique:** [e.g., T1566 Phishing, T1059 Command Execution]
-- **Evidence:** [Supporting evidence dari logs/IOCs]
-
-### 5. ATTACK TIMELINE (Jika Teridentifikasi)
-Kronologi serangan:
-- Initial compromise
-- Lateral movement (if any)
-- Objective achievement
-- Detection point
-
-### 6. DAMPAK POTENSIAL
-- **Technical Impact:** System compromise, data exposure, service disruption
-- **Business Impact:** Operational impact, reputational risk, compliance issues
-- **Risk Rating:** Quantify risk level
-
-### 7. RECOMMENDATIONS (Prioritized)
-**Immediate (0-24 hours):**
-1. [Action item with specific steps]
-2. [Action item with specific steps]
-
-**Short-term (1-7 days):**
-1. [Mitigation measure]
-2. [Investigation follow-up]
-
-**Long-term (Strategic):**
-1. [Security improvement]
-2. [Process enhancement]
-
-## WRITING GUIDELINES
-
-**Tone:** Profesional, faktual, actionable
-**Language:** Bahasa Indonesia formal (untuk laporan TNI AL)
-**Evidence-based:** Setiap claim harus didukung data
-**Actionable:** Recommendations harus spesifik dan implementable
-**Balanced:** Jika tidak ada threat confirmed, clearly state itu adalah false positive atau benign activity
-
-**AVOID:**
-- Spekulasi tanpa evidence
-- Teknis jargon berlebihan (explain untuk non-technical stakeholders)
-- Understatement threat (if genuine)
-- Overstatement threat (if false positive)
-
-Tulis laporan final sekarang dalam Bahasa Indonesia. Jangan awali dengan penjelasan bahwa Anda akan menulis laporan. Jangan tampilkan placeholder.
-
-### 1. RINGKASAN EKSEKUTIF
-"""
-        return prompt
 
     def investigate(
         self,
@@ -2852,6 +980,7 @@ Tulis laporan final sekarang dalam Bahasa Indonesia. Jangan awali dengan penjela
         parsed_logs_df: pd.DataFrame,
         session_id: Optional[str] = None,
         status_callback=None,
+        telemetry_callback=None,
     ) -> Dict[str, Any]:
         """
         Run full investigation pipeline
@@ -2868,51 +997,26 @@ Tulis laporan final sekarang dalam Bahasa Indonesia. Jangan awali dengan penjela
         # Store callback
         self.session_id = session_id
         self.status_callback = status_callback
+        self.telemetry_callback = telemetry_callback
 
         print("\n" + "=" * 60)
         print("STARTING AI AGENT INVESTIGATION")
         print("=" * 60)
+        self._emit_terminal(
+            "=" * 60 + "\nSTARTING AI AGENT INVESTIGATION\n" + "=" * 60,
+            progress=60,
+            level="stage",
+        )
 
         # Convert anomalies DataFrame to list of dicts
         anomalies = anomalies_df.to_dict("records")
 
-        # Initialize state
-        initial_state = {
-            "anomalies": anomalies,
-            "parsed_logs": parsed_logs_df,
-            "iocs_extracted": [],
-            "tool_calls": [],
-            "tool_results": [],
-            "reasoning_steps": [],
-            "planning_steps": [],
-            "planned_tool_calls": [],
-            "planning_completed": False,
-            "planning_round": 0,
-            "max_planning_rounds": 1,
-            "reflection_steps": [],
-            "post_correlation_follow_up_calls": [],
-            "observation_assessment": "",
-            "reflection_round": 0,
-            "max_reflection_rounds": self.DEFAULT_MAX_REFLECTION_ROUNDS,
-            "correlation_analysis": "",
-            "normalized_evidence": [],
-            "aggregated_ioc_evidence": {},
-            "tool_selection_trace": [],
-            "tool_validation_trace": [],
-            "agent_trace": [],
-            "investigation_status": "pending",
-            "investigation_confidence": 0.0,
-            "confidence_factors": [],
-            "supporting_evidence": [],
-            "inconclusive_reason": "",
-            "investigation_summary": "",
-            "attack_timeline": [],
-            "recommendations": [],
-            "current_stage": "init",
-            "completed": False,
-            "tool_execution_round": 0,
-            "max_tool_execution_rounds": self.DEFAULT_MAX_TOOL_EXECUTION_ROUNDS,
-        }
+        initial_state = build_initial_state(
+            anomalies,
+            parsed_logs_df,
+            max_reflection_rounds=self.DEFAULT_MAX_REFLECTION_ROUNDS,
+            max_tool_execution_rounds=self.DEFAULT_MAX_TOOL_EXECUTION_ROUNDS,
+        )
 
         # Run graph
         try:
@@ -2921,11 +1025,21 @@ Tulis laporan final sekarang dalam Bahasa Indonesia. Jangan awali dengan penjela
             print("\n" + "=" * 60)
             print("INVESTIGATION COMPLETED")
             print("=" * 60)
+            self._emit_terminal(
+                "=" * 60 + "\nAI AGENT INVESTIGATION COMPLETED\n" + "=" * 60,
+                progress=84,
+                level="success",
+            )
 
             return final_state
 
         except Exception as e:
             print(f"\nError during investigation: {e}")
+            self._emit_terminal(
+                f"[ERROR] Agent investigation failed: {e}",
+                progress=84,
+                level="error",
+            )
             raise
 
 

@@ -62,6 +62,34 @@ const ProviderLogo = ({ providerKey }) => {
   }
 }
 
+const getErrorText = (error, fallback) => {
+  const detail = error.response?.data?.detail
+  if (typeof detail === 'string' && detail.trim()) {
+    return detail
+  }
+  if (error.message) {
+    return `${fallback} (${error.message})`
+  }
+  return fallback
+}
+
+const mergeProviderSettings = (settingsData) => ({
+  ollama: {
+    ...emptyProviderForm.ollama,
+    ...settingsData.providers?.ollama,
+  },
+  gemini: {
+    ...emptyProviderForm.gemini,
+    ...settingsData.providers?.gemini,
+    api_key: '',
+  },
+  openrouter: {
+    ...emptyProviderForm.openrouter,
+    ...settingsData.providers?.openrouter,
+    api_key: '',
+  },
+})
+
 function SettingsPage() {
   const [selectedProvider, setSelectedProvider] = useState('ollama')
   const [providers, setProviders] = useState(emptyProviderForm)
@@ -73,32 +101,25 @@ function SettingsPage() {
 
   const loadSettings = async () => {
     setLoading(true)
+    setFeedback(null)
     try {
-      const [{ data: settingsData }, { data: statusData }] = await Promise.all([
-        axios.get('/api/settings/llm'),
-        axios.get('/api/settings/llm/status'),
-      ])
+      const { data: settingsData } = await axios.get('/api/settings/llm')
 
       setSelectedProvider(settingsData.selected_provider || 'ollama')
-      setProviders({
-        ollama: {
-          ...emptyProviderForm.ollama,
-          ...settingsData.providers?.ollama,
-        },
-        gemini: {
-          ...emptyProviderForm.gemini,
-          ...settingsData.providers?.gemini,
-          api_key: '',
-        },
-        openrouter: {
-          ...emptyProviderForm.openrouter,
-          ...settingsData.providers?.openrouter,
-          api_key: '',
-        },
-      })
-      setProviderStatus(statusData.providers || {})
+      setProviders(mergeProviderSettings(settingsData))
+
+      try {
+        const { data: statusData } = await axios.get('/api/settings/llm/status')
+        setProviderStatus(statusData.providers || {})
+      } catch (statusError) {
+        setProviderStatus({})
+        setFeedback({
+          type: 'warning',
+          text: getErrorText(statusError, 'LLM settings loaded, but provider health could not be refreshed.'),
+        })
+      }
     } catch (error) {
-      setFeedback({ type: 'error', text: error.response?.data?.detail || 'Failed to load LLM settings.' })
+      setFeedback({ type: 'error', text: getErrorText(error, 'Failed to load LLM settings.') })
     } finally {
       setLoading(false)
     }
@@ -168,7 +189,7 @@ function SettingsPage() {
       setFeedback({ type: 'success', text: 'LLM settings saved successfully.' })
       await loadSettings()
     } catch (error) {
-      setFeedback({ type: 'error', text: error.response?.data?.detail || 'Failed to save LLM settings.' })
+      setFeedback({ type: 'error', text: getErrorText(error, 'Failed to save LLM settings.') })
     } finally {
       setSaving(false)
     }
@@ -181,7 +202,7 @@ function SettingsPage() {
       setProviderStatus(data.providers || {})
       setFeedback({ type: 'info', text: 'Provider health refreshed.' })
     } catch (error) {
-      setFeedback({ type: 'error', text: error.response?.data?.detail || 'Failed to refresh provider health.' })
+      setFeedback({ type: 'error', text: getErrorText(error, 'Failed to refresh provider health.') })
     } finally {
       setRefreshing(false)
     }

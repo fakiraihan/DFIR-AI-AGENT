@@ -1,0 +1,49 @@
+# Linux AIT-LDS/Kyoushi DeepLog quick retrain config.
+# Run from D:/FAKI/NEWMLMODL with:
+#   python main_run.py --config_file D:/FAKI/FirstPrototype/backend/tools/deeplog_linux_ait_lds_quick.yaml
+#
+# dataset_name intentionally stays lmd2023 so the current training engine keeps
+# per-host chronological windows and normal-only DeepLog training without
+# editing the shared NEWMLMODL runtime.
+data_dir: D:/FAKI/NEWMLMODL/dataset/linux_ait_lds
+dataset_name: lmd2023
+log_file: linux_ait_lds.log
+embeddings: embeddings_average.json
+
+grouping: sliding
+session_level: entry
+window_size: 20
+step_size: 20
+is_chronological: true
+split_mode: per_host_chronological
+balanced_eval: true
+balanced_eval_seed: 42
+
+sequential: true
+semantic: false
+quantitative: false
+
+model_name: DeepLog
+embedding_dim: 128
+dropout: 0.1
+hidden_size: 128
+num_layers: 2
+history_size: 10
+topk: 9
+
+optimizer: adam
+adam_beta1: 0.9
+adam_beta2: 0.999
+lr: 0.001
+max_epoch: 6
+
+output_dir: D:/FAKI/NEWMLMODL/output_linux_ait_lds/
+resume: false
+train_size: 0.5
+valid_ratio: 0.1
+batch_size: 128
+accumulation_step: 1
+scheduler: linear
+warmup_rate: 0.1
+train: true
+remove_duplicates: true

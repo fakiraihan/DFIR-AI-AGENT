@@ -207,6 +207,7 @@ NEWMLMODL/output_windows_apt_v2/windows_apt/sliding/W20_S1_CTrue_train0.8/eval.r
 NEWMLMODL/output_windows_apt_v2/windows_apt/sliding/W20_S1_CTrue_train0.8/synthetic_eval_seed42_topk5_large.json
 NEWMLMODL/output_windows_apt_v2/windows_apt/sliding/W20_S1_CTrue_train0.8/synthetic_eval_seed42_topk10_large.json
 NEWMLMODL/output_windows_apt_v2/windows_apt/sliding/W20_S1_CTrue_train0.8/train.records.gz
+NEWMLMODL/output_windows_loghub*/
 NEWMLMODL/scripts/deeplog_topk_sweep.py
 NEWMLMODL/tests/test_synthetic_anomaly.py
 NEWMLMODL/tests/test_windows_apt_converter.py
