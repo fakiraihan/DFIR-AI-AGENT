@@ -211,3 +211,4 @@ NEWMLMODL/output_windows_loghub*/
 NEWMLMODL/scripts/deeplog_topk_sweep.py
 NEWMLMODL/tests/test_synthetic_anomaly.py
 NEWMLMODL/tests/test_windows_apt_converter.py
+FirstPrototype/backend/data/llm_settings.json
