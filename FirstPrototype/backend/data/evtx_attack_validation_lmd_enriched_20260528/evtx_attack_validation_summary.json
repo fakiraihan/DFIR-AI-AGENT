@@ -1,0 +1,577 @@
+{
+  "by_topk": {
+    "1": {
+      "anomaly_window_ratio": 0.1474,
+      "avg_unknown_ratio_mean": 0.506,
+      "detected_files": 257,
+      "files": 278,
+      "missed_files": 21,
+      "missed_sections": {
+        "Credential Access": 4,
+        "Defense Evasion": 6,
+        "Discovery": 2,
+        "Execution": 1,
+        "Lateral Movement": 3,
+        "Other": 1,
+        "Persistence": 4
+      },
+      "sample_recall": 0.9245,
+      "total_anomalies": 4017,
+      "total_windows": 27247
+    },
+    "3": {
+      "anomaly_window_ratio": 0.1396,
+      "avg_unknown_ratio_mean": 0.506,
+      "detected_files": 254,
+      "files": 278,
+      "missed_files": 24,
+      "missed_sections": {
+        "Command and Control": 1,
+        "Credential Access": 4,
+        "Defense Evasion": 6,
+        "Discovery": 2,
+        "Execution": 1,
+        "Lateral Movement": 3,
+        "Other": 1,
+        "Persistence": 4,
+        "Privilege Escalation": 2
+      },
+      "sample_recall": 0.9137,
+      "total_anomalies": 3805,
+      "total_windows": 27247
+    },
+    "5": {
+      "anomaly_window_ratio": 0.137,
+      "avg_unknown_ratio_mean": 0.506,
+      "detected_files": 254,
+      "files": 278,
+      "missed_files": 24,
+      "missed_sections": {
+        "Command and Control": 1,
+        "Credential Access": 4,
+        "Defense Evasion": 6,
+        "Discovery": 2,
+        "Execution": 1,
+        "Lateral Movement": 3,
+        "Other": 1,
+        "Persistence": 4,
+        "Privilege Escalation": 2
+      },
+      "sample_recall": 0.9137,
+      "total_anomalies": 3732,
+      "total_windows": 27247
+    },
+    "9": {
+      "anomaly_window_ratio": 0.1019,
+      "avg_unknown_ratio_mean": 0.506,
+      "detected_files": 213,
+      "files": 278,
+      "missed_files": 65,
+      "missed_sections": {
+        "AutomatedTestingTools": 1,
+        "Command and Control": 3,
+        "Credential Access": 14,
+        "Defense Evasion": 9,
+        "Discovery": 2,
+        "Execution": 4,
+        "Lateral Movement": 11,
+        "Other": 7,
+        "Persistence": 7,
+        "Privilege Escalation": 7
+      },
+      "sample_recall": 0.7662,
+      "total_anomalies": 2777,
+      "total_windows": 27247
+    }
+  },
+  "by_topk_section": {
+    "1": {
+      "(root)": {
+        "detected_files": 1,
+        "files": 1,
+        "missed_files": 0,
+        "profiles": {
+          "sysmon": 1
+        },
+        "sample_recall": 1.0,
+        "total_anomalies": 1
+      },
+      "AutomatedTestingTools": {
+        "detected_files": 8,
+        "files": 8,
+        "missed_files": 0,
+        "profiles": {
+          "sysmon": 7,
+          "windows_apt": 1
+        },
+        "sample_recall": 1.0,
+        "total_anomalies": 739
+      },
+      "Command and Control": {
+        "detected_files": 6,
+        "files": 6,
+        "missed_files": 0,
+        "profiles": {
+          "sysmon": 2,
+          "windows_apt": 4
+        },
+        "sample_recall": 1.0,
+        "total_anomalies": 146
+      },
+      "Credential Access": {
+        "detected_files": 35,
+        "files": 39,
+        "missed_files": 4,
+        "profiles": {
+          "sysmon": 19,
+          "windows_apt": 20
+        },
+        "sample_recall": 0.8974,
+        "total_anomalies": 240
+      },
+      "Defense Evasion": {
+        "detected_files": 30,
+        "files": 36,
+        "missed_files": 6,
+        "profiles": {
+          "sysmon": 28,
+          "windows_apt": 8
+        },
+        "sample_recall": 0.8333,
+        "total_anomalies": 199
+      },
+      "Discovery": {
+        "detected_files": 9,
+        "files": 11,
+        "missed_files": 2,
+        "profiles": {
+          "sysmon": 6,
+          "windows_apt": 5
+        },
+        "sample_recall": 0.8182,
+        "total_anomalies": 89
+      },
+      "Execution": {
+        "detected_files": 33,
+        "files": 34,
+        "missed_files": 1,
+        "profiles": {
+          "sysmon": 30,
+          "windows_apt": 4
+        },
+        "sample_recall": 0.9706,
+        "total_anomalies": 412
+      },
+      "Lateral Movement": {
+        "detected_files": 44,
+        "files": 47,
+        "missed_files": 3,
+        "profiles": {
+          "sysmon": 28,
+          "windows_apt": 19
+        },
+        "sample_recall": 0.9362,
+        "total_anomalies": 1085
+      },
+      "Other": {
+        "detected_files": 7,
+        "files": 8,
+        "missed_files": 1,
+        "profiles": {
+          "sysmon": 1,
+          "windows_apt": 7
+        },
+        "sample_recall": 0.875,
+        "total_anomalies": 25
+      },
+      "Persistence": {
+        "detected_files": 18,
+        "files": 22,
+        "missed_files": 4,
+        "profiles": {
+          "sysmon": 16,
+          "windows_apt": 6
+        },
+        "sample_recall": 0.8182,
+        "total_anomalies": 298
+      },
+      "Privilege Escalation": {
+        "detected_files": 66,
+        "files": 66,
+        "missed_files": 0,
+        "profiles": {
+          "sysmon": 53,
+          "windows_apt": 13
+        },
+        "sample_recall": 1.0,
+        "total_anomalies": 783
+      }
+    },
+    "3": {
+      "(root)": {
+        "detected_files": 1,
+        "files": 1,
+        "missed_files": 0,
+        "profiles": {
+          "sysmon": 1
+        },
+        "sample_recall": 1.0,
+        "total_anomalies": 1
+      },
+      "AutomatedTestingTools": {
+        "detected_files": 8,
+        "files": 8,
+        "missed_files": 0,
+        "profiles": {
+          "sysmon": 7,
+          "windows_apt": 1
+        },
+        "sample_recall": 1.0,
+        "total_anomalies": 734
+      },
+      "Command and Control": {
+        "detected_files": 5,
+        "files": 6,
+        "missed_files": 1,
+        "profiles": {
+          "sysmon": 2,
+          "windows_apt": 4
+        },
+        "sample_recall": 0.8333,
+        "total_anomalies": 103
+      },
+      "Credential Access": {
+        "detected_files": 35,
+        "files": 39,
+        "missed_files": 4,
+        "profiles": {
+          "sysmon": 19,
+          "windows_apt": 20
+        },
+        "sample_recall": 0.8974,
+        "total_anomalies": 194
+      },
+      "Defense Evasion": {
+        "detected_files": 30,
+        "files": 36,
+        "missed_files": 6,
+        "profiles": {
+          "sysmon": 28,
+          "windows_apt": 8
+        },
+        "sample_recall": 0.8333,
+        "total_anomalies": 194
+      },
+      "Discovery": {
+        "detected_files": 9,
+        "files": 11,
+        "missed_files": 2,
+        "profiles": {
+          "sysmon": 6,
+          "windows_apt": 5
+        },
+        "sample_recall": 0.8182,
+        "total_anomalies": 83
+      },
+      "Execution": {
+        "detected_files": 33,
+        "files": 34,
+        "missed_files": 1,
+        "profiles": {
+          "sysmon": 30,
+          "windows_apt": 4
+        },
+        "sample_recall": 0.9706,
+        "total_anomalies": 408
+      },
+      "Lateral Movement": {
+        "detected_files": 44,
+        "files": 47,
+        "missed_files": 3,
+        "profiles": {
+          "sysmon": 28,
+          "windows_apt": 19
+        },
+        "sample_recall": 0.9362,
+        "total_anomalies": 1016
+      },
+      "Other": {
+        "detected_files": 7,
+        "files": 8,
+        "missed_files": 1,
+        "profiles": {
+          "sysmon": 1,
+          "windows_apt": 7
+        },
+        "sample_recall": 0.875,
+        "total_anomalies": 14
+      },
+      "Persistence": {
+        "detected_files": 18,
+        "files": 22,
+        "missed_files": 4,
+        "profiles": {
+          "sysmon": 16,
+          "windows_apt": 6
+        },
+        "sample_recall": 0.8182,
+        "total_anomalies": 287
+      },
+      "Privilege Escalation": {
+        "detected_files": 64,
+        "files": 66,
+        "missed_files": 2,
+        "profiles": {
+          "sysmon": 53,
+          "windows_apt": 13
+        },
+        "sample_recall": 0.9697,
+        "total_anomalies": 771
+      }
+    },
+    "5": {
+      "(root)": {
+        "detected_files": 1,
+        "files": 1,
+        "missed_files": 0,
+        "profiles": {
+          "sysmon": 1
+        },
+        "sample_recall": 1.0,
+        "total_anomalies": 1
+      },
+      "AutomatedTestingTools": {
+        "detected_files": 8,
+        "files": 8,
+        "missed_files": 0,
+        "profiles": {
+          "sysmon": 7,
+          "windows_apt": 1
+        },
+        "sample_recall": 1.0,
+        "total_anomalies": 731
+      },
+      "Command and Control": {
+        "detected_files": 5,
+        "files": 6,
+        "missed_files": 1,
+        "profiles": {
+          "sysmon": 2,
+          "windows_apt": 4
+        },
+        "sample_recall": 0.8333,
+        "total_anomalies": 91
+      },
+      "Credential Access": {
+        "detected_files": 35,
+        "files": 39,
+        "missed_files": 4,
+        "profiles": {
+          "sysmon": 19,
+          "windows_apt": 20
+        },
+        "sample_recall": 0.8974,
+        "total_anomalies": 173
+      },
+      "Defense Evasion": {
+        "detected_files": 30,
+        "files": 36,
+        "missed_files": 6,
+        "profiles": {
+          "sysmon": 28,
+          "windows_apt": 8
+        },
+        "sample_recall": 0.8333,
+        "total_anomalies": 190
+      },
+      "Discovery": {
+        "detected_files": 9,
+        "files": 11,
+        "missed_files": 2,
+        "profiles": {
+          "sysmon": 6,
+          "windows_apt": 5
+        },
+        "sample_recall": 0.8182,
+        "total_anomalies": 81
+      },
+      "Execution": {
+        "detected_files": 33,
+        "files": 34,
+        "missed_files": 1,
+        "profiles": {
+          "sysmon": 30,
+          "windows_apt": 4
+        },
+        "sample_recall": 0.9706,
+        "total_anomalies": 405
+      },
+      "Lateral Movement": {
+        "detected_files": 44,
+        "files": 47,
+        "missed_files": 3,
+        "profiles": {
+          "sysmon": 28,
+          "windows_apt": 19
+        },
+        "sample_recall": 0.9362,
+        "total_anomalies": 996
+      },
+      "Other": {
+        "detected_files": 7,
+        "files": 8,
+        "missed_files": 1,
+        "profiles": {
+          "sysmon": 1,
+          "windows_apt": 7
+        },
+        "sample_recall": 0.875,
+        "total_anomalies": 9
+      },
+      "Persistence": {
+        "detected_files": 18,
+        "files": 22,
+        "missed_files": 4,
+        "profiles": {
+          "sysmon": 16,
+          "windows_apt": 6
+        },
+        "sample_recall": 0.8182,
+        "total_anomalies": 286
+      },
+      "Privilege Escalation": {
+        "detected_files": 64,
+        "files": 66,
+        "missed_files": 2,
+        "profiles": {
+          "sysmon": 53,
+          "windows_apt": 13
+        },
+        "sample_recall": 0.9697,
+        "total_anomalies": 769
+      }
+    },
+    "9": {
+      "(root)": {
+        "detected_files": 1,
+        "files": 1,
+        "missed_files": 0,
+        "profiles": {
+          "sysmon": 1
+        },
+        "sample_recall": 1.0,
+        "total_anomalies": 1
+      },
+      "AutomatedTestingTools": {
+        "detected_files": 7,
+        "files": 8,
+        "missed_files": 1,
+        "profiles": {
+          "sysmon": 7,
+          "windows_apt": 1
+        },
+        "sample_recall": 0.875,
+        "total_anomalies": 730
+      },
+      "Command and Control": {
+        "detected_files": 3,
+        "files": 6,
+        "missed_files": 3,
+        "profiles": {
+          "sysmon": 2,
+          "windows_apt": 4
+        },
+        "sample_recall": 0.5,
+        "total_anomalies": 86
+      },
+      "Credential Access": {
+        "detected_files": 25,
+        "files": 39,
+        "missed_files": 14,
+        "profiles": {
+          "sysmon": 19,
+          "windows_apt": 20
+        },
+        "sample_recall": 0.641,
+        "total_anomalies": 148
+      },
+      "Defense Evasion": {
+        "detected_files": 27,
+        "files": 36,
+        "missed_files": 9,
+        "profiles": {
+          "sysmon": 28,
+          "windows_apt": 8
+        },
+        "sample_recall": 0.75,
+        "total_anomalies": 182
+      },
+      "Discovery": {
+        "detected_files": 9,
+        "files": 11,
+        "missed_files": 2,
+        "profiles": {
+          "sysmon": 6,
+          "windows_apt": 5
+        },
+        "sample_recall": 0.8182,
+        "total_anomalies": 74
+      },
+      "Execution": {
+        "detected_files": 30,
+        "files": 34,
+        "missed_files": 4,
+        "profiles": {
+          "sysmon": 30,
+          "windows_apt": 4
+        },
+        "sample_recall": 0.8824,
+        "total_anomalies": 397
+      },
+      "Lateral Movement": {
+        "detected_files": 36,
+        "files": 47,
+        "missed_files": 11,
+        "profiles": {
+          "sysmon": 28,
+          "windows_apt": 19
+        },
+        "sample_recall": 0.766,
+        "total_anomalies": 118
+      },
+      "Other": {
+        "detected_files": 1,
+        "files": 8,
+        "missed_files": 7,
+        "profiles": {
+          "sysmon": 1,
+          "windows_apt": 7
+        },
+        "sample_recall": 0.125,
+        "total_anomalies": 3
+      },
+      "Persistence": {
+        "detected_files": 15,
+        "files": 22,
+        "missed_files": 7,
+        "profiles": {
+          "sysmon": 16,
+          "windows_apt": 6
+        },
+        "sample_recall": 0.6818,
+        "total_anomalies": 281
+      },
+      "Privilege Escalation": {
+        "detected_files": 59,
+        "files": 66,
+        "missed_files": 7,
+        "profiles": {
+          "sysmon": 53,
+          "windows_apt": 13
+        },
+        "sample_recall": 0.8939,
+        "total_anomalies": 757
+      }
+    }
+  }
+}

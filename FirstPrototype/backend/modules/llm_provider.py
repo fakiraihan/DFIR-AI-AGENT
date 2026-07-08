@@ -86,6 +86,46 @@ class OpenRouterRuntimeClient:
         return str(message.get("content", "")).strip()
 
 
+class GroqRuntimeClient:
+    def __init__(
+        self,
+        base_url: str,
+        model: str,
+        api_key: str,
+        temperature: float = 0.4,
+        max_completion_tokens: int = 8192,
+        reasoning_effort: str = "medium",
+    ):
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+        self.api_key = api_key
+        self.temperature = temperature
+        self.max_completion_tokens = max_completion_tokens
+        self.reasoning_effort = reasoning_effort
+
+    def invoke(self, prompt: str) -> str:
+        url = f"{self.base_url}/chat/completions"
+        payload = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": self.temperature,
+            "max_completion_tokens": self.max_completion_tokens,
+        }
+        if self.reasoning_effort:
+            payload["reasoning_effort"] = self.reasoning_effort
+        data = _json_request(
+            url,
+            method="POST",
+            body=payload,
+            headers={"Authorization": f"Bearer {self.api_key}"},
+        )
+        choices = data.get("choices", [])
+        if not choices:
+            raise LLMProviderError("Groq returned no choices")
+        message = choices[0].get("message", {})
+        return str(message.get("content", "")).strip()
+
+
 def _json_request(
     url: str,
     method: str = "GET",
@@ -215,6 +255,26 @@ def build_llm_client(provider_settings: Dict[str, Any], role: str = "agent") -> 
             max_tokens=max_tokens,
         )
 
+    if provider == "groq":
+        api_key = provider_settings.get("api_key", "")
+        if not api_key:
+            raise LLMProviderError("Groq API key is not configured")
+        base_url = provider_settings.get("base_url", "https://api.groq.com/openai/v1")
+        max_completion_tokens = int(
+            provider_settings.get("max_completion_tokens") or 8192
+        )
+        reasoning_effort = str(provider_settings.get("reasoning_effort") or "").strip()
+        if str(model).startswith("groq/compound"):
+            reasoning_effort = ""
+        return GroqRuntimeClient(
+            base_url=base_url,
+            model=model,
+            api_key=api_key,
+            temperature=0.2 if role == "filter" else 0.4,
+            max_completion_tokens=max_completion_tokens,
+            reasoning_effort=reasoning_effort,
+        )
+
     raise LLMProviderError(f"Unsupported provider '{provider}'")
 
 
@@ -291,6 +351,25 @@ def check_provider_health(
                 raise LLMProviderError(
                     f"Model '{model}' is not available in OpenRouter"
                 )
+        elif provider_name == "groq":
+            api_key = provider_settings.get("api_key", "")
+            model = provider_settings.get("model")
+            base_url = provider_settings.get(
+                "base_url", "https://api.groq.com/openai/v1"
+            ).rstrip("/")
+            if not api_key:
+                status["configured"] = False
+                raise LLMProviderError("Groq API key is not configured")
+            if not model:
+                raise LLMProviderError("Groq model is not configured")
+            data = _json_request(
+                f"{base_url}/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+            model_ids = {item.get("id") for item in data.get("data", [])}
+            status["model_available"] = model in model_ids
+            if not status["model_available"]:
+                raise LLMProviderError(f"Model '{model}' is not available in Groq")
         else:
             raise LLMProviderError(f"Unsupported provider '{provider_name}'")
 

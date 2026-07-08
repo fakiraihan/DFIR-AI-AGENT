@@ -1,0 +1,32 @@
+{
+  "by_topk": {
+    "9": {
+      "anomaly_window_ratio": 0.952,
+      "avg_unknown_ratio_mean": 0.6462,
+      "detected_files": 30,
+      "files": 34,
+      "missed_files": 4,
+      "missed_sections": {
+        "(root)": 4
+      },
+      "sample_recall": 0.8824,
+      "total_anomalies": 397,
+      "total_windows": 417
+    }
+  },
+  "by_topk_section": {
+    "9": {
+      "(root)": {
+        "detected_files": 30,
+        "files": 34,
+        "missed_files": 4,
+        "profiles": {
+          "sysmon": 30,
+          "windows_apt": 4
+        },
+        "sample_recall": 0.8824,
+        "total_anomalies": 397
+      }
+    }
+  }
+}

@@ -26,9 +26,14 @@ class InvestigationState(TypedDict):
     reflection_steps: Annotated[List[str], operator.add]
     post_correlation_follow_up_calls: Annotated[List[Dict[str, Any]], operator.add]
     observation_assessment: str
+    evidence_assessment: Dict[str, Any]
+    evidence_route: str
     reflection_round: int
     max_reflection_rounds: int
     correlation_analysis: str
+    structured_correlation: Dict[str, Any]
+    evidence_gaps: List[str]
+    follow_up_requests: List[Dict[str, Any]]
     normalized_evidence: Annotated[List[Dict[str, Any]], operator.add]
     aggregated_ioc_evidence: Dict[str, Dict[str, Any]]
     tool_selection_trace: Annotated[List[Dict[str, Any]], operator.add]
@@ -39,6 +44,9 @@ class InvestigationState(TypedDict):
     confidence_factors: List[str]
     supporting_evidence: List[Dict[str, Any]]
     inconclusive_reason: str
+
+    # Triage
+    triage_labels: Dict[str, str]
 
     # Output
     investigation_summary: str
@@ -75,9 +83,14 @@ def build_initial_state(
         "reflection_steps": [],
         "post_correlation_follow_up_calls": [],
         "observation_assessment": "",
+        "evidence_assessment": {},
+        "evidence_route": "",
         "reflection_round": 0,
         "max_reflection_rounds": max_reflection_rounds,
         "correlation_analysis": "",
+        "structured_correlation": {},
+        "evidence_gaps": [],
+        "follow_up_requests": [],
         "normalized_evidence": [],
         "aggregated_ioc_evidence": {},
         "tool_selection_trace": [],
@@ -91,6 +104,7 @@ def build_initial_state(
         "investigation_summary": "",
         "attack_timeline": [],
         "recommendations": [],
+        "triage_labels": {},
         "current_stage": "init",
         "completed": False,
         "tool_execution_round": 0,

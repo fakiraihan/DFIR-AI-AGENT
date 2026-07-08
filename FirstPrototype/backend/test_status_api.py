@@ -1,20 +1,44 @@
 import unittest
+import tempfile
+import os
+from pathlib import Path
+
+TEMP_ROOT = Path(tempfile.mkdtemp(prefix="dfir_status_api_test_"))
+os.environ.setdefault("SESSION_CACHE_PATH", str(TEMP_ROOT / "session_cache"))
+os.environ.setdefault("AUTH_DB_PATH", str(TEMP_ROOT / "dfir_auth.sqlite3"))
 
 from fastapi.testclient import TestClient
 
 from main import app, session_store
+from modules.auth_store import auth_store
 
 
 class InvestigationStatusApiTest(unittest.TestCase):
     def setUp(self):
         session_store.clear()
+        auth_store.clear_all()
         self.client = TestClient(app)
 
     def tearDown(self):
         session_store.clear()
+        auth_store.clear_all()
+
+    def register_user(self):
+        response = self.client.post(
+            "/api/auth/register",
+            json={
+                "username": "statususer",
+                "email": "status@example.test",
+                "password": "status password",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        return response.json()["user"]
 
     def test_status_endpoint_returns_lightweight_payload(self):
+        user = self.register_user()
         session_store.set_session("session_test", {
+            "user_id": user["id"],
             "file_name": "sample.evtx",
             "status": "processing",
             "stage": "ai_agent",
@@ -75,7 +99,9 @@ class InvestigationStatusApiTest(unittest.TestCase):
         )
 
     def test_status_endpoint_sanitizes_activity_events(self):
+        user = self.register_user()
         session_store.set_session("session_trace", {
+            "user_id": user["id"],
             "file_name": "sample.evtx",
             "status": "processing",
             "stage": "ai_agent",

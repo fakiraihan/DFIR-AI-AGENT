@@ -149,18 +149,19 @@ class DeepLogTemplateEnrichmentTest(unittest.TestCase):
             self.assertIn("ImageClass=cmd", written.loc[0, "EventTemplate"])
             self.assertIn("DestinationPortClass=smb", written.loc[1, "EventTemplate"])
 
-    def test_sysmon_profile_can_promote_enriched_model_independently(self):
+    def test_windows_sysmon_profile_can_promote_enriched_model_independently(self):
         class DummySettings:
-            sysmon_deeplog_model_path = "D:/models/enriched/DeepLog.pt"
-            sysmon_deeplog_vocab_path = "D:/models/enriched/DeepLog.pkl"
-            sysmon_deeplog_window_size = 10
-            sysmon_deeplog_topk = 9
-            sysmon_parser_template_strategy = "provider_eventid"
-            sysmon_deeplog_template_enrichment = "lmd_sysmon_v1"
+            windows_sysmon_deeplog_model_path = "D:/models/enriched/DeepLog.pt"
+            windows_sysmon_deeplog_vocab_path = "D:/models/enriched/DeepLog.pkl"
+            windows_sysmon_deeplog_window_size = 10
+            windows_sysmon_deeplog_topk = 9
+            windows_sysmon_parser_template_strategy = "provider_eventid"
+            windows_sysmon_deeplog_template_enrichment = "lmd_sysmon_v1"
             deeplog_topk = 3
 
-        profile = build_model_profile("sysmon", DummySettings())
+        profile = build_model_profile("windows_sysmon", DummySettings())
 
+        self.assertEqual(profile["name"], "windows_sysmon")
         self.assertEqual(profile["topk"], 9)
         self.assertEqual(profile["window_size"], 10)
         self.assertEqual(profile["template_enrichment"], "lmd_sysmon_v1")

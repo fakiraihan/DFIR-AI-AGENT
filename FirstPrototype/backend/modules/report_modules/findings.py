@@ -10,6 +10,7 @@ def build_technical_findings(
     anomalies: List[Dict[str, Any]],
     tool_results: List[Dict[str, Any]],
     ioc_analysis: List[Dict[str, Any]],
+    total_extracted_iocs: int = 0,
 ) -> List[Dict[str, Any]]:
     """Build concise technical findings for the report."""
     findings: List[Dict[str, Any]] = []
@@ -31,10 +32,15 @@ def build_technical_findings(
         distribution = ", ".join(
             f"{count} {ioc_type}" for ioc_type, count in type_counter.most_common(4)
         )
+        curated_note = (
+            f" (dikurasi dari {total_extracted_iocs} IOC unik yang diekstrak)"
+            if total_extracted_iocs > len(ioc_analysis)
+            else ""
+        )
         findings.append(
             {
                 "title": "IOC terkurasi",
-                "detail": f"Sebanyak {len(ioc_analysis)} IOC bernilai analitis berhasil dipertahankan untuk investigasi lanjutan, dengan distribusi utama: {distribution}.",
+                "detail": f"Sebanyak {len(ioc_analysis)} IOC bernilai analitis berhasil dipertahankan untuk investigasi lanjutan{curated_note}, dengan distribusi utama: {distribution}.",
             }
         )
 

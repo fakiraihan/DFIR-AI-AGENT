@@ -119,6 +119,38 @@ def parse_linux_timestamp(raw_line: str, *, default_year: int = 2022) -> int:
     return 0
 
 
+_TRUSTED_EXE_PREFIXES = (
+    "/usr/bin/",
+    "/usr/sbin/",
+    "/usr/lib/",
+    "/usr/libexec/",
+    "/bin/",
+    "/sbin/",
+    "/lib/",
+    "/lib64/",
+    "/snap/",
+    "/var/ossec/bin/",
+)
+
+
+def _exe_template_value(value: str) -> str:
+    """Collapse executables running from standard system directories.
+
+    Execution from a well-known system path (package binaries, systemd
+    generators, security-agent installs, ...) is routine and otherwise
+    creates hundreds of distinct-but-benign template variants (one per
+    binary name) purely from normal system/package noise. Execution from
+    anywhere else (/tmp, a user home directory, /opt, ...) is the actually
+    anomalous signal worth keeping distinct for APT detection.
+    """
+    text = str(value).strip().strip("\"'")
+    if not text:
+        return "unknown"
+    if text.startswith(_TRUSTED_EXE_PREFIXES):
+        return "<sys>"
+    return _basename(text)
+
+
 def _build_audit_template(text: str) -> str:
     values = _parse_key_values(text)
     for inner_msg in re.findall(r"\bmsg=(['\"])(.*?)\1", text):
@@ -130,7 +162,7 @@ def _build_audit_template(text: str) -> str:
     if values.get("syscall"):
         parts.append(f"syscall={values['syscall']}")
     if values.get("exe"):
-        parts.append(f"exe={_basename(values['exe'])}")
+        parts.append(f"exe={_exe_template_value(values['exe'])}")
     if values.get("res"):
         parts.append(f"res={values['res']}")
     elif values.get("success"):

@@ -1,6 +1,11 @@
 """
 Threat Intelligence Tool Wrappers
-Integrations for 6 threat intel APIs
+Integrations for threat intel APIs:
+  - abuse.ch: ThreatFox, MalwareBazaar, URLHaus (single Auth-Key)
+  - AlienVault OTX
+  - Shodan InternetDB (no key, free)
+  - AbuseIPDB (free tier, 1000 req/day)
+  - VirusTotal
 """
 import requests
 import json
@@ -136,12 +141,22 @@ class ThreatIntelToolkit:
 
             response_items = [item for item in response_items if isinstance(item, dict)]
             exact_response_items = self._filter_exact_ioc_matches(response_items, ioc)
-            if response_items and not exact_response_items:
-                print(f"    Exact IOC matches: 0 (ignored {len(response_items)} related/non-exact items)")
-                query_status = "no_exact_match"
-                response_items = []
-            elif exact_response_items:
-                response_items = exact_response_items
+            related_items = [item for item in response_items if item not in exact_response_items]
+            if exact_response_items:
+                for item in exact_response_items:
+                    item.setdefault("match_type", "exact")
+                # Keep up to 5 related items as supplementary context.
+                for item in related_items[:5]:
+                    item.setdefault("match_type", "related")
+                response_items = exact_response_items + related_items[:5]
+            elif related_items:
+                # No exact match — surface the top related items so the analyst
+                # still gets context (URLs, sibling domains, related hashes).
+                for item in related_items[:5]:
+                    item.setdefault("match_type", "related")
+                response_items = related_items[:5]
+                query_status = "related_match"
+                print(f"    Exact IOC matches: 0 (kept {len(response_items)} related items as context)")
 
             print(f"    Query status: {query_status}")
             print(f"    Results: {len(response_items)} items")
@@ -180,14 +195,27 @@ class ThreatIntelToolkit:
             return self._error_result("threatfox", e, ioc=ioc, ioc_type=ioc_type)
 
     def _filter_exact_ioc_matches(self, items: List[Dict[str, Any]], requested_ioc: str) -> List[Dict[str, Any]]:
-        """Keep ThreatFox rows that match the exact IOC requested."""
-        requested = requested_ioc.strip().lower().rstrip("/")
+        """Keep ThreatFox rows that match the exact IOC requested.
+
+        Normalization is intentionally lenient so that benign formatting drift
+        (scheme, trailing slash, case in host) does not hide a true match.
+        """
+        requested = self._normalize_ioc_for_match(requested_ioc)
         exact_matches = []
         for item in items:
-            returned_ioc = str(item.get("ioc", "")).strip().lower().rstrip("/")
+            returned_ioc = self._normalize_ioc_for_match(str(item.get("ioc", "")))
             if returned_ioc == requested:
                 exact_matches.append(item)
         return exact_matches
+
+    @staticmethod
+    def _normalize_ioc_for_match(value: str) -> str:
+        normalized = (value or "").strip().lower().rstrip("/")
+        for scheme in ("http://", "https://", "hxxp://", "hxxps://"):
+            if normalized.startswith(scheme):
+                normalized = normalized[len(scheme):]
+                break
+        return normalized
     
     # ===== MalwareBazaar =====
     def malwarebazaar_lookup(self, file_hash: str) -> Dict[str, Any]:
@@ -337,10 +365,10 @@ class ThreatIntelToolkit:
         headers = {"X-OTX-API-KEY": api_key}
         
         try:
-            response = requests.get(base_url, headers=headers, timeout=10)
+            response = requests.get(base_url, headers=headers, timeout=20)
             response.raise_for_status()
             data = response.json()
-            
+
             result = {
                 "tool": "alienvault_otx",
                 "ioc": ioc,
@@ -387,57 +415,164 @@ class ThreatIntelToolkit:
 
         return normalized or "IPv4"
     
-    # ===== GreyNoise =====
-    def greynoise_lookup(self, ip: str) -> Dict[str, Any]:
+    # ===== Shodan InternetDB =====
+    def shodan_internetdb_lookup(self, ip: str) -> Dict[str, Any]:
         """
-        Query GreyNoise for IP classification
-        Documentation: https://docs.greynoise.io/docs/using-the-greynoise-api
-        
-        Args:
-            ip: IP address
-            
-        Returns:
-            GreyNoise classification
+        Query Shodan InternetDB for IP exposure context.
+        Documentation: https://internetdb.shodan.io/
+
+        Free, key-less endpoint that returns open ports, hostnames, CPEs,
+        vulnerabilities (CVEs) and Shodan tags for a given IPv4. Replaces
+        GreyNoise as the default "noise / exposure" enrichment.
         """
-        cached = self._get_cached("greynoise", ip)
+        print("\n  -> Shodan InternetDB API Call")
+        print(f"    IOC: {ip} (type: ip)")
+
+        cached = self._get_cached("shodan_internetdb", ip)
         if cached:
+            print("    Cache hit")
             return cached
-        
-        api_key = self.api_keys.get("greynoise_api_key")
-        if not api_key:
-            # Use community API (no key required, limited data)
-            url = f"https://api.greynoise.io/v3/community/{ip}"
-            headers = {}
-        else:
-            # Full API with key - use Bearer token authentication
-            url = f"https://api.greynoise.io/v2/noise/context/{ip}"
-            headers = {"Authorization": f"Bearer {api_key}"}
-        
+
+        url = f"https://internetdb.shodan.io/{ip}"
         try:
-            response = requests.get(url, headers=headers, timeout=10)
+            print(f"    Sending GET to {url}")
+            response = requests.get(url, timeout=10)
+            print(f"    Response: HTTP {response.status_code}")
+
+            if response.status_code == 404:
+                # InternetDB returns 404 when the IP isn't in the dataset.
+                result = {
+                    "tool": "shodan_internetdb",
+                    "ioc": ip,
+                    "ioc_type": "ip",
+                    "ip": ip,
+                    "timestamp": datetime.now().isoformat(),
+                    "status": "not_found",
+                    "data": {},
+                    "ports": [],
+                    "hostnames": [],
+                    "cpes": [],
+                    "vulns": [],
+                    "tags": [],
+                }
+                self._set_cache("shodan_internetdb", ip, result)
+                return result
+
             response.raise_for_status()
-            data = response.json()
-            
+            data = response.json() if response.content else {}
+            vulns = list(data.get("vulns") or [])
+            tags = list(data.get("tags") or [])
+
             result = {
-                "tool": "greynoise",
+                "tool": "shodan_internetdb",
                 "ioc": ip,
                 "ioc_type": "ip",
                 "ip": ip,
                 "timestamp": datetime.now().isoformat(),
                 "status": "ok",
                 "data": data,
-                "classification": data.get("classification"),
-                "noise": data.get("noise", False),
-                "riot": data.get("riot", False),
-                "message": data.get("message"),
-                "tags": data.get("tags", [])
+                "ports": list(data.get("ports") or []),
+                "hostnames": list(data.get("hostnames") or []),
+                "cpes": list(data.get("cpes") or []),
+                "vulns": vulns,
+                "tags": tags,
             }
-            
-            self._set_cache("greynoise", ip, result)
+            print(
+                "    Ports: {p} | Vulns: {v} | Tags: {t}".format(
+                    p=len(result["ports"]), v=len(vulns), t=len(tags)
+                )
+            )
+            self._set_cache("shodan_internetdb", ip, result)
             return result
-            
+
+        except requests.exceptions.RequestException as e:
+            print(f"    Request failed: {e}")
+            return self._error_result(
+                "shodan_internetdb", e, ioc=ip, ioc_type="ip", ip=ip
+            )
         except Exception as e:
-            return self._error_result("greynoise", e, ioc=ip, ioc_type="ip", ip=ip)
+            print(f"    Exception: {e}")
+            return self._error_result(
+                "shodan_internetdb", e, ioc=ip, ioc_type="ip", ip=ip
+            )
+
+    # ===== AbuseIPDB =====
+    def abuseipdb_lookup(self, ip: str, max_age_days: int = 90) -> Dict[str, Any]:
+        """
+        Query AbuseIPDB for IP reputation / abuse-confidence score.
+        Documentation: https://docs.abuseipdb.com/#check-endpoint
+
+        Free tier: 1000 checks/day. Requires `abuseipdb_api_key`.
+        """
+        print("\n  -> AbuseIPDB API Call")
+        print(f"    IOC: {ip} (type: ip)")
+
+        cached = self._get_cached("abuseipdb", ip)
+        if cached:
+            print("    Cache hit")
+            return cached
+
+        api_key = self.api_keys.get("abuseipdb_api_key")
+        if not api_key:
+            print("    Auth: No API key configured (get a free key at abuseipdb.com)")
+            return self._error_result(
+                "abuseipdb",
+                "API key required (get free at abuseipdb.com)",
+                ioc=ip,
+                ioc_type="ip",
+                ip=ip,
+            )
+
+        url = "https://api.abuseipdb.com/api/v2/check"
+        headers = {"Key": api_key, "Accept": "application/json"}
+        params = {"ipAddress": ip, "maxAgeInDays": str(max_age_days), "verbose": ""}
+
+        try:
+            print(f"    Sending GET to {url}")
+            response = requests.get(url, headers=headers, params=params, timeout=10)
+            print(f"    Response: HTTP {response.status_code}")
+            response.raise_for_status()
+            payload = response.json() if response.content else {}
+            data = payload.get("data") or {}
+
+            score = int(data.get("abuseConfidenceScore", 0) or 0)
+            result = {
+                "tool": "abuseipdb",
+                "ioc": ip,
+                "ioc_type": "ip",
+                "ip": ip,
+                "timestamp": datetime.now().isoformat(),
+                "status": "ok",
+                "data": data,
+                "abuse_confidence_score": score,
+                "total_reports": data.get("totalReports", 0),
+                "num_distinct_users": data.get("numDistinctUsers", 0),
+                "country_code": data.get("countryCode"),
+                "isp": data.get("isp"),
+                "domain": data.get("domain"),
+                "usage_type": data.get("usageType"),
+                "is_whitelisted": bool(data.get("isWhitelisted")),
+                "is_tor": bool(data.get("isTor")),
+                "last_reported_at": data.get("lastReportedAt"),
+            }
+            print(
+                "    abuseConfidenceScore: {s} | reports: {r}".format(
+                    s=score, r=result["total_reports"]
+                )
+            )
+            self._set_cache("abuseipdb", ip, result)
+            return result
+
+        except requests.exceptions.RequestException as e:
+            print(f"    Request failed: {e}")
+            return self._error_result(
+                "abuseipdb", e, ioc=ip, ioc_type="ip", ip=ip
+            )
+        except Exception as e:
+            print(f"    Exception: {e}")
+            return self._error_result(
+                "abuseipdb", e, ioc=ip, ioc_type="ip", ip=ip
+            )
     
     # ===== VirusTotal =====
     def virustotal_lookup(self, ioc: str, ioc_type: str = "ip") -> Dict[str, Any]:
@@ -534,8 +669,9 @@ class ThreatIntelToolkit:
             "malwarebazaar_lookup",
             "urlhaus_lookup",
             "alienvault_otx_lookup",
-            "greynoise_lookup",
-            "virustotal_lookup"
+            "shodan_internetdb_lookup",
+            "abuseipdb_lookup",
+            "virustotal_lookup",
         ]
 
 

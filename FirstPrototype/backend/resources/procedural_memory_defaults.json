@@ -330,6 +330,88 @@
         "best_use_case": "Distinguish benign internet noise from real threats"
       }
     },
+    "shodan_internetdb": {
+      "service_name": "Shodan InternetDB",
+      "provider": "Shodan",
+      "endpoint": "https://internetdb.shodan.io/{ip}",
+      "auth_method": "none",
+      "rate_limit": "unauthenticated",
+      "best_for": [
+        "ip_exposure",
+        "open_ports",
+        "vulnerability_context",
+        "hostname_lookup"
+      ],
+      "supported_ioc_types": ["ipv4"],
+      "response_format": "json",
+      "key_response_fields": ["ports", "hostnames", "cpes", "vulns", "tags"],
+      "reliability_score": 0.9,
+      "avg_response_time": 0.6,
+      "cost": "free",
+      "cost_notes": "No API key required",
+      "unique_features": [
+        "Open ports + service banners",
+        "CVE / vulnerability tags",
+        "Reverse DNS hostnames"
+      ],
+      "error_handling": {
+        "404": "IP not present in Shodan dataset"
+      },
+      "learned_patterns": {
+        "success_rate": 0.92,
+        "typical_response_time": 0.7,
+        "best_use_case": "Quick attack-surface and CVE context for any IPv4"
+      }
+    },
+    "abuseipdb": {
+      "service_name": "AbuseIPDB",
+      "provider": "AbuseIPDB LLC",
+      "endpoint": "https://api.abuseipdb.com/api/v2/check",
+      "auth_method": "header",
+      "auth_header": "Key",
+      "rate_limit": "1000_per_day_free",
+      "rate_limit_notes": "Free tier 1000 checks/day; paid plans available",
+      "best_for": [
+        "ip_reputation",
+        "abuse_history",
+        "scanner_brute_force_detection"
+      ],
+      "supported_ioc_types": ["ipv4", "ipv6"],
+      "response_format": "json",
+      "key_response_fields": [
+        "abuseConfidenceScore",
+        "totalReports",
+        "numDistinctUsers",
+        "isTor",
+        "isWhitelisted",
+        "countryCode",
+        "isp",
+        "usageType"
+      ],
+      "classifications": [
+        "benign",
+        "suspicious",
+        "malicious"
+      ],
+      "reliability_score": 0.88,
+      "avg_response_time": 1.0,
+      "cost": "freemium",
+      "cost_notes": "Free 1000/day; commercial plans for higher volume",
+      "unique_features": [
+        "Community-reported abuse score",
+        "Report category breakdown",
+        "TOR exit-node flag"
+      ],
+      "error_handling": {
+        "401": "Invalid or missing API key",
+        "429": "Daily rate limit exceeded"
+      },
+      "learned_patterns": {
+        "success_rate": 0.9,
+        "typical_response_time": 1.2,
+        "best_use_case": "Confirm whether an external IP has prior abuse history"
+      }
+    },
     "virustotal": {
       "service_name": "VirusTotal",
       "provider": "Google (Chronicle Security)",
@@ -386,9 +468,10 @@
   },
   "tool_selection_rules": {
     "ip_address": {
-      "primary": "greynoise",
-      "reason": "Fast classification, distinguishes benign scanners",
+      "primary": "shodan_internetdb",
+      "reason": "Free, key-less exposure + vuln context for any IPv4",
       "fallback": [
+        "abuseipdb",
         "alienvault_otx",
         "threatfox"
       ],
@@ -400,11 +483,12 @@
       "primary": "malwarebazaar",
       "reason": "Specialized malware sample database",
       "fallback": [
+        "alienvault_otx",
         "virustotal",
         "threatfox"
       ],
       "parallel_allowed": true,
-      "stop_on_first_hit": true,
+      "stop_on_first_hit": false,
       "confidence_multiplier": 1.5
     },
     "domain": {
@@ -422,8 +506,9 @@
       "primary": "urlhaus",
       "reason": "Primary focus on malware distribution URLs",
       "fallback": [
-        "virustotal",
-        "threatfox"
+        "alienvault_otx",
+        "threatfox",
+        "virustotal"
       ],
       "parallel_allowed": false,
       "stop_on_first_hit": false,

@@ -1,0 +1,46 @@
+# Linux-APT-Dataset-2024 DeepLog retrain config: isolate epoch effect only.
+# history_size stays at the original working value (10); only max_epoch raised 8->20.
+# Run from D:/FAKI/NEWMLMODL with:
+#   python main_run.py --config_file D:/FAKI/FirstPrototype/backend/tools/deeplog_linux_apt_2024_epoch20.yaml
+data_dir: D:/FAKI/NEWMLMODL/dataset/linux_apt_2024
+dataset_name: lmd2023
+log_file: linux_apt_2024.log
+embeddings: embeddings_average.json
+
+grouping: sliding
+session_level: entry
+window_size: 20
+step_size: 20
+is_chronological: true
+split_mode: per_host_chronological
+balanced_eval: true
+balanced_eval_seed: 42
+
+sequential: true
+semantic: false
+quantitative: false
+
+model_name: DeepLog
+embedding_dim: 128
+dropout: 0.1
+hidden_size: 128
+num_layers: 2
+history_size: 10
+topk: 9
+
+optimizer: adam
+adam_beta1: 0.9
+adam_beta2: 0.999
+lr: 0.001
+max_epoch: 20
+
+output_dir: D:/FAKI/NEWMLMODL/output_linux_apt_2024_epoch20/
+resume: false
+train_size: 0.8
+valid_ratio: 0.1
+batch_size: 128
+accumulation_step: 1
+scheduler: linear
+warmup_rate: 0.1
+train: true
+remove_duplicates: true

@@ -27,7 +27,7 @@ class LLMProviderHealthTest(unittest.TestCase):
 
         with patch("modules.llm_provider.request.urlopen", side_effect=fake_urlopen):
             llm_provider._json_request(
-                "https://api.koboillm.com/v1/models",
+                "https://example.test/v1/models",
                 headers={"Authorization": "Bearer test-key"},
             )
 
@@ -90,6 +90,57 @@ class LLMProviderHealthTest(unittest.TestCase):
 
         self.assertFalse(statuses["ollama"]["ok"])
         self.assertIn("bad provider response", statuses["ollama"]["error"])
+
+    def test_groq_client_posts_chat_completion_payload_without_reasoning_effort(self):
+        captured = {}
+
+        def fake_json_request(url, method="GET", body=None, headers=None):
+            captured["url"] = url
+            captured["method"] = method
+            captured["body"] = body
+            captured["headers"] = headers
+            return {"choices": [{"message": {"content": "done"}}]}
+
+        with patch("modules.llm_provider._json_request", side_effect=fake_json_request):
+            client = llm_provider.build_llm_client(
+                {
+                    "provider": "groq",
+                    "base_url": "https://api.groq.com/openai/v1",
+                    "model": "groq/compound",
+                    "api_key": "test-key",
+                    "max_completion_tokens": 2048,
+                    "reasoning_effort": "medium",
+                }
+            )
+            response = client.invoke("hello")
+
+        self.assertEqual(response, "done")
+        self.assertEqual(
+            captured["url"], "https://api.groq.com/openai/v1/chat/completions"
+        )
+        self.assertEqual(captured["method"], "POST")
+        self.assertEqual(captured["headers"], {"Authorization": "Bearer test-key"})
+        self.assertEqual(captured["body"]["model"], "groq/compound")
+        self.assertEqual(captured["body"]["max_completion_tokens"], 2048)
+        self.assertNotIn("reasoning_effort", captured["body"])
+
+    def test_groq_health_checks_model_catalog(self):
+        with patch(
+            "modules.llm_provider._json_request",
+            return_value={"data": [{"id": "groq/compound"}]},
+        ):
+            status = llm_provider.check_provider_health(
+                "groq",
+                {
+                    "provider": "groq",
+                    "base_url": "https://api.groq.com/openai/v1",
+                    "model": "groq/compound",
+                    "api_key": "test-key",
+                },
+            )
+
+        self.assertTrue(status["ok"])
+        self.assertTrue(status["model_available"])
 
 
 if __name__ == "__main__":

@@ -1,0 +1,94 @@
+{
+  "10": {
+    "anomalies": 15,
+    "anomaly_window_ratio": 0.0242,
+    "by_source_kind": {
+      "raw_evtx": {
+        "anomalies": 1,
+        "anomaly_window_ratio": 0.0035,
+        "flagged_sources": 1,
+        "sources": 1,
+        "windows": 287
+      },
+      "structured_normal_sample": {
+        "anomalies": 14,
+        "anomaly_window_ratio": 0.0422,
+        "flagged_sources": 9,
+        "sources": 9,
+        "windows": 332
+      }
+    },
+    "flagged_sources": 10,
+    "sources": 10,
+    "windows": 619
+  },
+  "14": {
+    "anomalies": 11,
+    "anomaly_window_ratio": 0.0178,
+    "by_source_kind": {
+      "raw_evtx": {
+        "anomalies": 1,
+        "anomaly_window_ratio": 0.0035,
+        "flagged_sources": 1,
+        "sources": 1,
+        "windows": 287
+      },
+      "structured_normal_sample": {
+        "anomalies": 10,
+        "anomaly_window_ratio": 0.0301,
+        "flagged_sources": 8,
+        "sources": 9,
+        "windows": 332
+      }
+    },
+    "flagged_sources": 9,
+    "sources": 10,
+    "windows": 619
+  },
+  "3": {
+    "anomalies": 39,
+    "anomaly_window_ratio": 0.063,
+    "by_source_kind": {
+      "raw_evtx": {
+        "anomalies": 4,
+        "anomaly_window_ratio": 0.0139,
+        "flagged_sources": 1,
+        "sources": 1,
+        "windows": 287
+      },
+      "structured_normal_sample": {
+        "anomalies": 35,
+        "anomaly_window_ratio": 0.1054,
+        "flagged_sources": 9,
+        "sources": 9,
+        "windows": 332
+      }
+    },
+    "flagged_sources": 10,
+    "sources": 10,
+    "windows": 619
+  },
+  "5": {
+    "anomalies": 25,
+    "anomaly_window_ratio": 0.0404,
+    "by_source_kind": {
+      "raw_evtx": {
+        "anomalies": 2,
+        "anomaly_window_ratio": 0.007,
+        "flagged_sources": 1,
+        "sources": 1,
+        "windows": 287
+      },
+      "structured_normal_sample": {
+        "anomalies": 23,
+        "anomaly_window_ratio": 0.0693,
+        "flagged_sources": 9,
+        "sources": 9,
+        "windows": 332
+      }
+    },
+    "flagged_sources": 10,
+    "sources": 10,
+    "windows": 619
+  }
+}

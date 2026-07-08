@@ -30,6 +30,8 @@ class DFIRAgentRoutingTest(unittest.TestCase):
             "tool_calls": [],
             "tool_results": tool_results or [],
             "reasoning_steps": [],
+            "evidence_assessment": {},
+            "evidence_route": "",
             "correlation_analysis": "",
             "investigation_summary": "",
             "attack_timeline": [],
@@ -74,9 +76,38 @@ class DFIRAgentRoutingTest(unittest.TestCase):
         route = agent._decide_next_step(state)
         follow_up_calls = agent._select_follow_up_tool_calls(state)
 
-        self.assertEqual(route, "needs_more_intel")
+        self.assertEqual(route, "needs_more_evidence")
         self.assertTrue(follow_up_calls)
         self.assertNotIn("greynoise_lookup", {call["tool"] for call in follow_up_calls})
+
+    def test_assessor_records_explicit_evidence_route(self):
+        agent = self._build_agent()
+        state = self._build_state(
+            iocs_extracted=[
+                {
+                    "type": "ip",
+                    "value": "8.8.8.8",
+                    "source_line": 1,
+                    "window_id": 1,
+                }
+            ],
+            tool_results=[
+                {
+                    "tool": "greynoise",
+                    "ioc": "8.8.8.8",
+                    "ioc_type": "ip",
+                    "classification": "malicious",
+                    "status": "ok",
+                }
+            ],
+            tool_execution_round=1,
+        )
+
+        result = agent.assess_evidence(state)
+
+        self.assertEqual(result["evidence_route"], "needs_more_evidence")
+        self.assertEqual(result["evidence_assessment"]["decision"], "needs_more_evidence")
+        self.assertEqual(result["current_stage"], "evidence_assessment_complete")
 
     def test_router_stops_when_round_limit_is_reached(self):
         agent = self._build_agent()
@@ -104,7 +135,7 @@ class DFIRAgentRoutingTest(unittest.TestCase):
 
         route = agent._decide_next_step(state)
 
-        self.assertEqual(route, "sufficient_intel")
+        self.assertEqual(route, "sufficient_evidence")
 
     def test_router_continues_when_existing_intel_is_sufficient(self):
         agent = self._build_agent()
@@ -131,7 +162,7 @@ class DFIRAgentRoutingTest(unittest.TestCase):
 
         route = agent._decide_next_step(state)
 
-        self.assertEqual(route, "sufficient_intel")
+        self.assertEqual(route, "sufficient_evidence")
 
 
 if __name__ == "__main__":

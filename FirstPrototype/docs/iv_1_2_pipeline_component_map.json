@@ -1,0 +1,272 @@
+[
+  {
+    "component": "upload_log_file",
+    "path": "backend/routers/upload.py:L15-L44",
+    "type": "router",
+    "input": "UploadFile (multipart HTTP POST)",
+    "output": "JSON {session_id, file_name, file_size, message}",
+    "role": "Entry point upload log ke sistem; membuat session baru",
+    "important_lines": "L15-L44"
+  },
+  {
+    "component": "store_uploaded_file",
+    "path": "backend/services/storage_service.py:L86-L103",
+    "type": "service",
+    "input": "UploadFile, session_prefix string",
+    "output": "Tuple(session_id, safe_file_name, file_path, file_size)",
+    "role": "Validasi ekstensi, sanitasi filename, buat direktori sesi, simpan file ke disk",
+    "important_lines": "L86-L103"
+  },
+  {
+    "component": "session_store",
+    "path": "backend/session_store.py",
+    "type": "data/output",
+    "input": "session_id, dict payload",
+    "output": "Session state dict",
+    "role": "Penyimpanan state investigasi (in-memory, persisten antar request)",
+    "important_lines": "N/A - seluruh file"
+  },
+  {
+    "component": "run_investigation_pipeline",
+    "path": "backend/services/orchestrator_service.py:L134-L596",
+    "type": "service",
+    "input": "session_id",
+    "output": "Memperbarui session_store dengan status, report, dan metadata pipeline",
+    "role": "Orkestrator pipeline utama: parsing → DeepLog → LLM filter → AI Agent → Report",
+    "important_lines": "L134-L260 (Stage 1+2), L300-L382 (LLM gate), L462-L469 (AI Agent)"
+  },
+  {
+    "component": "parse_with_profile",
+    "path": "backend/services/parsing_service.py:L194-L274",
+    "type": "function",
+    "input": "file_path: str, settings: Settings, max_lines: Optional[int]",
+    "output": "Tuple(parsed_df: DataFrame, templates: List[Dict], selected_profile: dict)",
+    "role": "Auto-deteksi tipe log dan pemilihan profil parser (windows_loghub / linux_ait_lds / sysmon / windows_apt / general)",
+    "important_lines": "L194-L274"
+  },
+  {
+    "component": "build_model_profile",
+    "path": "backend/services/parsing_service.py:L24-L95",
+    "type": "function",
+    "input": "name: str, settings: Settings",
+    "output": "dict {name, model_path, vocab_path, window_size, topk, template_strategy, template_enrichment, ...}",
+    "role": "Membangun konfigurasi profil model DeepLog berdasarkan nama profil",
+    "important_lines": "L24-L95"
+  },
+  {
+    "component": "is_windows_loghub_text",
+    "path": "backend/services/parsing_service.py:L131-L159",
+    "type": "function",
+    "input": "file_path: str, sample_lines: int = 200",
+    "output": "bool",
+    "role": "Heuristik deteksi format Windows CBS/CSI log (format: YYYY-MM-DD LEVEL COMPONENT MSG)",
+    "important_lines": "L131-L159"
+  },
+  {
+    "component": "is_linux_ait_lds_text",
+    "path": "backend/services/parsing_service.py:L162-L191",
+    "type": "function",
+    "input": "file_path: str, sample_lines: int = 200",
+    "output": "bool",
+    "role": "Heuristik deteksi format Linux syslog (AIT-LDS dataset)",
+    "important_lines": "L162-L191"
+  },
+  {
+    "component": "is_sysmon_evtx",
+    "path": "backend/services/parsing_service.py:L119-L128",
+    "type": "function",
+    "input": "file_path: str, parsed_df: DataFrame",
+    "output": "bool",
+    "role": "Deteksi EVTX Sysmon berdasarkan rasio provider 'Microsoft-Windows-Sysmon' >= 50%",
+    "important_lines": "L119-L128"
+  },
+  {
+    "component": "apply_template_enrichment",
+    "path": "backend/services/parsing_service.py:L98-L116",
+    "type": "function",
+    "input": "parsed_df, templates, enrichment_mode: str",
+    "output": "Tuple(enriched_df, enriched_templates)",
+    "role": "Opsional: terapkan enrichment template deterministik (lmd_sysmon_v1) ke DataFrame",
+    "important_lines": "L98-L116"
+  },
+  {
+    "component": "DrainParser",
+    "path": "backend/modules/parsing.py:L53-L721",
+    "type": "class",
+    "input": "Konfigurasi: depth, sim_threshold, max_children, template_strategy",
+    "output": "Instance parser dengan state TemplateMiner dan latest_templates",
+    "role": "Parsing file log dengan algoritma Drain; mendukung EVTX, CSV, teks",
+    "important_lines": "L53-L84 (init), L358-L367 (parse_file dispatcher)"
+  },
+  {
+    "component": "DrainParser.parse_evtx_file",
+    "path": "backend/modules/parsing.py:L100-L210",
+    "type": "function",
+    "input": "file_path: str, max_lines: Optional[int]",
+    "output": "pd.DataFrame",
+    "role": "Parsing Windows EVTX: ekstraksi System fields (Provider, EventID, Channel, Task, Level) dan EventData key-value",
+    "important_lines": "L100-L210"
+  },
+  {
+    "component": "DrainParser.parse_csv_log",
+    "path": "backend/modules/parsing.py:L212-L287",
+    "type": "function",
+    "input": "file_path: str, max_lines: Optional[int]",
+    "output": "pd.DataFrame",
+    "role": "Parsing CSV log; prioritas kolom Message/Content; mencoba training Drain terlebih dahulu",
+    "important_lines": "L212-L287"
+  },
+  {
+    "component": "DrainParser.parse_text_log",
+    "path": "backend/modules/parsing.py:L289-L356",
+    "type": "function",
+    "input": "file_path: str, max_lines: Optional[int]",
+    "output": "pd.DataFrame",
+    "role": "Parsing log teks baris per baris; routing ke template strategy yang sesuai",
+    "important_lines": "L289-L356"
+  },
+  {
+    "component": "DrainParser._extract_parameters",
+    "path": "backend/modules/parsing.py:L632-L667",
+    "type": "function",
+    "input": "original: str (raw log line)",
+    "output": "Tuple(parameter_array: List[str], parameter_map: Dict[str,str])",
+    "role": "Ekstraksi IOC dan key-value pairs dari raw log: IP, hash, domain, URL, field umum",
+    "important_lines": "L632-L667"
+  },
+  {
+    "component": "DrainParser._build_evtx_template",
+    "path": "backend/modules/parsing.py:L516-L548",
+    "type": "function",
+    "input": "provider, event_id, raw_line, channel, task, level",
+    "output": "Tuple(template_str, cluster_id)",
+    "role": "Membangun template event EVTX berdasarkan template_strategy yang aktif",
+    "important_lines": "L516-L548"
+  },
+  {
+    "component": "parse_log_file",
+    "path": "backend/modules/parsing.py:L723-L729",
+    "type": "function",
+    "input": "file_path: str, **kwargs (depth, sim_threshold, max_children, template_strategy, max_lines)",
+    "output": "Tuple(pd.DataFrame, List[Dict])",
+    "role": "Convenience entrypoint: inisialisasi DrainParser dan memanggil parse_file",
+    "important_lines": "L723-L729"
+  },
+  {
+    "component": "enrich_event_template",
+    "path": "backend/modules/deeplog_template_enrichment.py:L317-L376",
+    "type": "function",
+    "input": "row: pd.Series/Mapping, mode: str",
+    "output": "str (enriched template)",
+    "role": "Enrichment template Sysmon dengan token semantik (ImageClass, CmdClass, DestinationPortClass, dll.)",
+    "important_lines": "L317-L376"
+  },
+  {
+    "component": "DeepLogDetector",
+    "path": "backend/modules/anomaly.py:L26-L901",
+    "type": "class",
+    "input": "model_path, vocab_path, window_size, topk, step_size, decision_policy, dan parameter lainnya",
+    "output": "Instance detector dengan model LSTM dan vocabulary yang dimuat",
+    "role": "Wrapper model LSTM DeepLog untuk sliding window anomaly detection",
+    "important_lines": "L26-L97 (init), L130-L261 (detect_anomalies)"
+  },
+  {
+    "component": "DeepLogDetector.detect_anomalies",
+    "path": "backend/modules/anomaly.py:L130-L261",
+    "type": "function",
+    "input": "df: pd.DataFrame (hasil parsing)",
+    "output": "pd.DataFrame (semua window dengan metadata anomali)",
+    "role": "Sliding window → vocab lookup → LSTM inference → top-k comparison → anomaly classification",
+    "important_lines": "L130-L261"
+  },
+  {
+    "component": "DeepLogDetector._build_windows",
+    "path": "backend/modules/anomaly.py:L543-L554",
+    "type": "function",
+    "input": "total_templates: int, history_size: Optional[int]",
+    "output": "List[Tuple[window_id, start_idx, next_idx]]",
+    "role": "Membuat daftar sliding window berdasarkan window_size dan step_size",
+    "important_lines": "L543-L554"
+  },
+  {
+    "component": "DeepLogDetector._predict_topk",
+    "path": "backend/modules/anomaly.py:L556-L575",
+    "type": "function",
+    "input": "window_indices: List[int], actual_idx: int",
+    "output": "Tuple(topk_indices, topk_probs, actual_prob)",
+    "role": "LSTM forward pass; menghasilkan top-k prediksi dan probabilitas event aktual",
+    "important_lines": "L556-L575"
+  },
+  {
+    "component": "detect_anomalies_in_logs",
+    "path": "backend/modules/anomaly.py:L903-L912",
+    "type": "function",
+    "input": "parsed_df, model_path, vocab_path, **kwargs",
+    "output": "Tuple(results_df, anomalies_df)",
+    "role": "Convenience wrapper: instansiasi DeepLogDetector dan filter anomali",
+    "important_lines": "L903-L912"
+  },
+  {
+    "component": "apply_decision_policy",
+    "path": "backend/modules/anomaly_decision.py",
+    "type": "function",
+    "input": "decision_policy, is_anomaly, strict_is_anomaly, anomaly_score, evaluation_status, score_threshold",
+    "output": "Tuple(is_anomaly: bool, evaluation_status: str)",
+    "role": "Menerapkan decision policy (topk / f1_constrained_recall) pada hasil evaluasi window",
+    "important_lines": "N/A - seluruh file (2488 bytes)"
+  },
+  {
+    "component": "LLMAnomalyFilter",
+    "path": "backend/modules/llm_filter.py:L18-L437",
+    "type": "class",
+    "input": "ollama_base_url, ollama_model, llm (opsional), provider_name",
+    "output": "Instance filter dengan koneksi LLM",
+    "role": "Batch-level LLM sanity gate untuk anomali DeepLog",
+    "important_lines": "L18-L102 (init + filter_anomalies)"
+  },
+  {
+    "component": "LLMAnomalyFilter.filter_anomalies",
+    "path": "backend/modules/llm_filter.py:L49-L102",
+    "type": "function",
+    "input": "anomalies_df: DataFrame, parsed_logs_df: DataFrame",
+    "output": "pd.DataFrame (subset atau full anomalies dengan anotasi llm_gate_*)",
+    "role": "Satu batch LLM call untuk memilih policy; anotasi dan terapkan policy pada anomali",
+    "important_lines": "L49-L102"
+  },
+  {
+    "component": "LLMAnomalyFilter._build_batch_prompt",
+    "path": "backend/modules/llm_filter.py:L217-L266",
+    "type": "function",
+    "input": "anomalies_df, summaries: List[Dict]",
+    "output": "str (prompt untuk LLM)",
+    "role": "Membangun prompt batch yang berisi statistik anomali dan sampel top-20",
+    "important_lines": "L217-L266"
+  },
+  {
+    "component": "append_gate_observations",
+    "path": "backend/modules/gate_observations.py:L18-L102",
+    "type": "function",
+    "input": "output_path, session_id, file_name, model_profile, initial_anomalies_df, filtered_anomalies_df, investigation_state",
+    "output": "int (jumlah record yang ditulis ke JSONL)",
+    "role": "Telemetry pasif: mencatat keputusan gate dan hasil investigasi ke JSONL untuk evaluasi mendatang",
+    "important_lines": "L18-L102"
+  },
+  {
+    "component": "Settings",
+    "path": "backend/config.py:L9-L143",
+    "type": "config",
+    "input": "Environment variables / .env file",
+    "output": "Settings instance dengan semua konfigurasi pipeline",
+    "role": "Konfigurasi terpusat: path model, parameter Drain, parameter DeepLog, LLM settings",
+    "important_lines": "L42-L139"
+  },
+  {
+    "component": "run_quick_analysis",
+    "path": "backend/services/analyze_service.py:L67-L186",
+    "type": "service",
+    "input": "file: UploadFile, max_lines, sample_step, anomaly_limit",
+    "output": "JSON response {session_id, summary, anomaly_results, debug}",
+    "role": "Pipeline ringan: upload + parsing + DeepLog saja, tanpa LLM filter dan AI Agent",
+    "important_lines": "L67-L186"
+  }
+]

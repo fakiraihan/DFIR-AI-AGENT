@@ -17,7 +17,7 @@ BASE_DIR = Path(__file__).parent.parent
 DATA_DIR = BASE_DIR / "data" / "raw_logs"
 OUTPUT_DIR = BASE_DIR / "output"
 MODELS_DIR = BASE_DIR / "models"
-SESSION_CACHE_DIR = BASE_DIR / "data" / "session_store"
+SESSION_CACHE_DIR = BASE_DIR / settings.session_cache_path
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)

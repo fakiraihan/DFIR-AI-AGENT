@@ -65,8 +65,25 @@ def to_markdown(report: Dict[str, Any]) -> str:
     lines.append("")
     lines.append("## Detection & Analysis Findings")
     lines.append(f"- Anomaly Count: {detection.get('anomaly_count', 0)}")
-    lines.append(f"- IOC Count: {detection.get('ioc_count', 0)}")
+    ioc_count = detection.get("ioc_count", 0)
+    ioc_total_extracted = detection.get("ioc_count_total_extracted", 0)
+    if ioc_total_extracted > ioc_count:
+        lines.append(
+            f"- IOC Count: {ioc_count} curated of {ioc_total_extracted} total extracted"
+        )
+    else:
+        lines.append(f"- IOC Count: {ioc_count}")
     lines.append(f"- Tool Result Count: {detection.get('tool_result_count', 0)}")
+    strongest = detection.get("strongest_compromise_indicators", [])
+    if strongest:
+        lines.append("")
+        lines.append("### Highest-Signal Anomaly Windows")
+        for item in strongest:
+            evidence_ids = ", ".join(item.get("evidence_ids", [])) or "Not available"
+            lines.append(
+                f"- {item.get('indicator', '-')} | category={item.get('category', '-')} | strength={item.get('strength', '-')} | Evidence IDs: {evidence_ids} | {item.get('reason', '-')}"
+            )
+        lines.append("")
     for finding in detection.get("findings", []):
         evidence_ids = ", ".join(finding.get("evidence_ids", [])) or "Not available"
         lines.append(
@@ -96,8 +113,8 @@ def to_markdown(report: Dict[str, Any]) -> str:
 
     lines.append("")
     lines.append("## Recommendations")
-    for recommendation in report.get("recommendations", []):
-        lines.append(f"- {recommendation}")
+    for index, recommendation in enumerate(report.get("recommendations", []), start=1):
+        lines.append(f"{index}. {recommendation}")
 
     lines.append("")
     lines.append("## Limitations & Confidence")
@@ -111,7 +128,7 @@ def to_markdown(report: Dict[str, Any]) -> str:
     if appendices.get("ioc_table"):
         for ioc in appendices.get("ioc_table", []):
             lines.append(
-                f"- {ioc.get('type', 'unknown')} `{ioc.get('value', '-')}` | threat={ioc.get('threat_level', 'low')} | source_line={ioc.get('source_line', '-')} | source_window={ioc.get('source_window', '-')} | intel={ioc.get('threat_intel', '-')}"
+                f"- {ioc.get('indicator') or ioc.get('value', '-')} | type={ioc.get('indicator_type', ioc.get('type', 'unknown'))} | threat={ioc.get('threat_level', 'low')} | source_line={ioc.get('source_line', '-')} | source_window={ioc.get('source_window', '-')} | intel={ioc.get('threat_intel', '-')}"
             )
     else:
         lines.append("- No curated IOC entries.")

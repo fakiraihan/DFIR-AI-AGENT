@@ -43,6 +43,8 @@ class DFIRAgentPostCorrelationTest(unittest.TestCase):
             "reflection_steps": [],
             "post_correlation_follow_up_calls": [],
             "observation_assessment": "",
+            "evidence_assessment": {},
+            "evidence_route": "",
             "reflection_round": 0,
             "max_reflection_rounds": 1,
             "correlation_analysis": "",
@@ -80,7 +82,7 @@ class DFIRAgentPostCorrelationTest(unittest.TestCase):
             merged_state = self._build_state(**merged)
             route = agent._decide_post_correlation_step(merged_state)
 
-        self.assertEqual(route, "more_intel_needed")
+        self.assertEqual(route, "needs_follow_up")
         self.assertTrue(result["post_correlation_follow_up_calls"])
         self.assertNotIn(
             "threatfox_lookup",
@@ -121,7 +123,7 @@ class DFIRAgentPostCorrelationTest(unittest.TestCase):
         with redirect_stdout(io.StringIO()):
             route = agent._decide_post_correlation_step(state)
 
-        self.assertEqual(route, "sufficient_after_reflection")
+        self.assertEqual(route, "ready_to_report")
 
     def test_post_correlation_no_followups_moves_to_timeline(self):
         agent = DFIRAgent(llm=FailingLLM())
@@ -147,7 +149,7 @@ class DFIRAgentPostCorrelationTest(unittest.TestCase):
             route = agent._decide_post_correlation_step(merged_state)
 
         self.assertEqual(result["post_correlation_follow_up_calls"], [])
-        self.assertEqual(route, "sufficient_after_reflection")
+        self.assertEqual(route, "ready_to_report")
 
     def test_post_correlation_uses_static_fallback_on_memory_error(self):
         agent = DFIRAgent(llm=FailingLLM(), procedural_memory=ExplodingMemory())
@@ -164,7 +166,7 @@ class DFIRAgentPostCorrelationTest(unittest.TestCase):
             route = agent._decide_post_correlation_step(merged_state)
 
         self.assertTrue(result["post_correlation_follow_up_calls"])
-        self.assertEqual(route, "more_intel_needed")
+        self.assertEqual(route, "needs_follow_up")
 
 
 if __name__ == "__main__":

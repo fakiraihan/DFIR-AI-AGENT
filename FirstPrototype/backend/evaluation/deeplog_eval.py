@@ -2389,11 +2389,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         choices=(
             "auto",
             "general",
-            "sysmon",
-            "windows_loghub",
-            "windows_apt",
+            "windows_sysmon",
+            "windows_evtx",
             "lmd_enriched",
-            "linux_ait_lds",
+            "linux_log",
         ),
         default="auto",
     )

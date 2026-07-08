@@ -9,6 +9,7 @@ import pandas as pd
 
 from langgraph.graph import StateGraph, END
 
+from modules.agent_modules import assessment as agent_assessment
 from modules.agent_modules import constants as agent_constants
 from modules.agent_modules import evidence as agent_evidence
 from modules.agent_modules import execution as agent_execution
@@ -21,6 +22,8 @@ from modules.agent_modules import selection as agent_selection
 from modules.agent_modules.state import InvestigationState, build_initial_state
 from modules.agent_modules import timeline as agent_timeline
 from modules.agent_modules import tooling as agent_tooling
+from modules.agent_modules import triage as agent_triage
+from modules.agent_modules.correlation import build_structured_correlation
 from modules.procedural_memory import ProceduralMemory
 from modules.threat_intel import ThreatIntelToolkit
 
@@ -107,53 +110,57 @@ class DFIRAgent:
         workflow = StateGraph(InvestigationState)
 
         # Add nodes
-        workflow.add_node("ioc_extractor", self.extract_iocs)
+        workflow.add_node("anomaly_triage", self.triage_anomalies)
+        workflow.add_node("extractor", self.extract_iocs)
+        workflow.add_node("context", self.context_case_builder)
         workflow.add_node("planner", self.plan_goals)
         workflow.add_node("tool_selector", self.select_tools)
         workflow.add_node("tool_executor", self.execute_tools)
+        workflow.add_node("assessor", self.assess_evidence)
         workflow.add_node("correlator", self.correlate_findings)
-        workflow.add_node("post_correlation_assessment", self.post_correlation_assessment)
-        workflow.add_node("context_only_summary", self.context_only_summary)
-        workflow.add_node("inconclusive_correlation", self.inconclusive_correlation)
-        workflow.add_node("timeline_builder", self.build_timeline)
-        workflow.add_node("report_generator", self.generate_summary)
+        workflow.add_node("reflector", self.post_correlation_assessment)
+        workflow.add_node("inconclusive", self.inconclusive_correlation)
+        workflow.add_node("timeline", self.build_timeline)
+        workflow.add_node("reporter", self.generate_summary)
 
         # Add edges (agentic control flow with bounded runtime routing)
-        workflow.set_entry_point("ioc_extractor")
+        workflow.set_entry_point("anomaly_triage")
+        workflow.add_edge("anomaly_triage", "extractor")
         workflow.add_conditional_edges(
-            "ioc_extractor",
+            "extractor",
             self._route_after_ioc_extraction,
             {
                 "has_iocs": "planner",
-                "no_iocs": "context_only_summary",
+                "no_iocs": "context",
             },
         )
+        workflow.add_edge("context", "reporter")
         workflow.add_edge("planner", "tool_selector")
         workflow.add_edge("tool_selector", "tool_executor")
+        workflow.add_edge("tool_executor", "assessor")
         workflow.add_conditional_edges(
-            "tool_executor",
-            self._decide_next_step,
+            "assessor",
+            self._route_after_assessment,
             {
-                "needs_more_intel": "tool_selector",
-                "sufficient_intel": "correlator",
-                "no_iocs": "report_generator",
-                "no_successful_evidence": "inconclusive_correlation",
+                "needs_more_evidence": "tool_selector",
+                "sufficient_evidence": "correlator",
+                "no_iocs": "reporter",
+                "no_usable_evidence": "inconclusive",
             },
         )
-        workflow.add_edge("correlator", "post_correlation_assessment")
+        workflow.add_edge("correlator", "reflector")
         workflow.add_conditional_edges(
-            "post_correlation_assessment",
+            "reflector",
             self._decide_post_correlation_step,
             {
-                "more_intel_needed": "tool_selector",
-                "sufficient_after_reflection": "timeline_builder",
-                "no_iocs": "report_generator",
+                "needs_follow_up": "tool_selector",
+                "ready_to_report": "timeline",
+                "no_iocs": "reporter",
             },
         )
-        workflow.add_edge("timeline_builder", "report_generator")
-        workflow.add_edge("context_only_summary", END)
-        workflow.add_edge("inconclusive_correlation", "timeline_builder")
-        workflow.add_edge("report_generator", END)
+        workflow.add_edge("inconclusive", "timeline")
+        workflow.add_edge("timeline", "reporter")
+        workflow.add_edge("reporter", END)
 
         return workflow
 
@@ -164,16 +171,33 @@ class DFIRAgent:
         return decision
 
     def _decide_next_step(self, state: InvestigationState) -> str:
-        """Route the graph based on observations from the latest tool round."""
-        decision = agent_routing.decide_next_step(
-            state,
-            default_max_tool_execution_rounds=self.DEFAULT_MAX_TOOL_EXECUTION_ROUNDS,
-            coerce_int=self._coerce_int,
-            has_successful_normalized_evidence=self._has_successful_normalized_evidence,
-            select_follow_up_tool_calls=self._select_follow_up_tool_calls,
-        )
-        self._emit_terminal(f"Routing decision: {decision}", progress=76)
+        decision = agent_assessment.decide_evidence_route(self, state)
+        self._emit_terminal(f"Evidence assessment: {decision}", progress=76)
         return decision
+
+    def _route_after_assessment(self, state: InvestigationState) -> str:
+        decision = agent_assessment.route_after_assessment(state)
+        self._emit_terminal(f"Evidence routing: {decision}", progress=76)
+        return decision
+
+    def triage_anomalies(self, state: InvestigationState) -> Dict[str, Any]:
+        """Node: Semantic triage — single LLM call reading actual log content."""
+        if self.status_callback and self.session_id:
+            self.status_callback(
+                self.session_id, "ai_agent", "Semantic triage anomali dengan LLM...", 58
+            )
+        self._emit_terminal(
+            "=" * 60 + "\nANOMALY TRIAGE (Semantic)\n" + "=" * 60,
+            progress=58,
+            level="stage",
+        )
+        result = agent_triage.triage_anomalies(state, self.llm)
+        self._emit_terminal(
+            f"Triage selesai: {len(result['anomalies'])} anomalies retained",
+            progress=60,
+            level="success",
+        )
+        return result
 
     def extract_iocs(self, state: InvestigationState) -> Dict[str, Any]:
         """
@@ -242,6 +266,9 @@ class DFIRAgent:
         Node: Execute selected threat intel tools
         """
         return agent_execution.execute_tools(self, state)
+
+    def assess_evidence(self, state: InvestigationState) -> Dict[str, Any]:
+        return agent_assessment.assess_evidence(self, state)
 
     def _execute_single_tool_call(
         self, call: Mapping[str, Any], index: int, total: int
@@ -329,7 +356,7 @@ class DFIRAgent:
         )
 
     def _select_new_reflection_tool_calls(
-        self, state: InvestigationState
+        self, state: Mapping[str, Any]
     ) -> List[Dict[str, Any]]:
         """Return post-correlation reflection calls that remain unattempted."""
         return agent_tooling.select_new_tool_calls(
@@ -640,8 +667,12 @@ class DFIRAgent:
             print("=" * 60)
 
             # Store full correlation analysis in state for report generation
+            structured = build_structured_correlation(self, state, str(response))
             return {
                 "correlation_analysis": response,
+                "structured_correlation": structured,
+                "evidence_gaps": structured["evidence_gaps"],
+                "follow_up_requests": structured["follow_up_requests"],
                 "reasoning_steps": [
                     f"Correlation analysis completed: {len(anomalies)} anomalies correlated with {len(tool_results)} threat intel results"
                 ],
@@ -657,8 +688,14 @@ class DFIRAgent:
             import traceback
 
             print(traceback.format_exc())
+            structured = build_structured_correlation(
+                self, state, f"Correlation error: {str(e)}"
+            )
             return {
                 "correlation_analysis": f"Correlation error: {str(e)}",
+                "structured_correlation": structured,
+                "evidence_gaps": structured["evidence_gaps"],
+                "follow_up_requests": structured["follow_up_requests"],
                 "reasoning_steps": [f"Correlation error: {e}"],
             }
 
@@ -772,6 +809,9 @@ class DFIRAgent:
         if not iocs:
             return [], []
 
+        structured_correlation = state.get("structured_correlation") or {}
+        structured_gaps = structured_correlation.get("evidence_gaps") or []
+        structured_requests = structured_correlation.get("follow_up_requests") or []
         correlation_text = str(state.get("correlation_analysis") or "").lower()
         gap_keywords = (
             "insufficient",
@@ -784,7 +824,9 @@ class DFIRAgent:
             "perlu validasi",
             "perlu enrichment",
         )
-        has_evidence_gap = any(keyword in correlation_text for keyword in gap_keywords)
+        has_evidence_gap = bool(structured_gaps or structured_requests) or any(
+            keyword in correlation_text for keyword in gap_keywords
+        )
         follow_up_keys = self._follow_up_ioc_keys(state)
 
         if follow_up_keys:
@@ -815,9 +857,19 @@ class DFIRAgent:
 
         return follow_up_calls, [reason] + memory_reasons[:4]
 
+    def context_case_builder(self, state: InvestigationState) -> Dict[str, Any]:
+        result = agent_reporting.context_only_summary(self, state)
+        return {
+            **result,
+            "current_stage": "context_complete",
+            "completed": False,
+            "reasoning_steps": [
+                "Context case prepared for report generation because no valid IOC was extracted"
+            ],
+        }
+
     def context_only_summary(self, state: InvestigationState) -> Dict[str, Any]:
-        """Finish safely when anomaly context exists but no valid IOC was extracted."""
-        return agent_reporting.context_only_summary(self, state)
+        return self.context_case_builder(state)
 
     def inconclusive_correlation(self, state: InvestigationState) -> Dict[str, Any]:
         """Set a safe inconclusive state when enrichment produced no usable evidence."""

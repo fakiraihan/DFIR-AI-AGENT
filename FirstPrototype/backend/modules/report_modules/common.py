@@ -74,6 +74,7 @@ def count_unique_hits(
             or result.get("ip")
             or result.get("url")
             or result.get("hash")
+            or result.get("domain")
         )
         key = ioc_value.lower() if ioc_value else f"__result__:{id(result)}"
         seen.add(key)
@@ -201,6 +202,23 @@ def ioc_priority(ioc_type: str, tool_info: Dict[str, Any]) -> int:
     elif tool_info and not tool_info.get("error") and not is_skipped_result(tool_info):
         base += 1
     return base
+
+
+def ioc_type_label(ioc_type: str) -> str:
+    """Return a concise user-facing IOC type label."""
+    labels = {
+        "ip": "IP",
+        "domain": "Domain",
+        "url": "URL",
+        "sha256": "SHA256",
+        "md5": "MD5",
+    }
+    return labels.get(str(ioc_type or "").lower(), "IOC")
+
+
+def format_ioc_indicator(ioc_type: str, value: str) -> str:
+    """Format an IOC with its type so analysts can scan it quickly."""
+    return f"{ioc_type_label(ioc_type)}: {value}"
 
 
 def is_low_signal_ioc(ioc_type: str, value: str) -> bool:

@@ -119,6 +119,40 @@ def normalize_tool_result(
         summary_parts.extend(
             present_values([tool_result.get("classification"), tool_result.get("message")])
         )
+    elif source == "shodan_internetdb_lookup":
+        vulns = tool_result.get("vulns") or []
+        ports = tool_result.get("ports") or []
+        tags = tool_result.get("tags") or []
+        if vulns:
+            verdict = "suspicious"
+            confidence = max(confidence, min(0.85, 0.55 + min(len(vulns), 6) * 0.05))
+            summary_parts.append(f"shodan_vulns={len(vulns)}")
+        elif ports or tags:
+            summary_parts.append(
+                f"shodan_ports={len(ports)} tags={len(tags)}"
+            )
+        else:
+            raw_status_l = str(tool_result.get("status") or "").lower()
+            if raw_status_l == "not_found":
+                summary_parts.append("not in shodan dataset")
+    elif source == "abuseipdb_lookup":
+        score = safe_positive_count(tool_result.get("abuse_confidence_score"))
+        reports = safe_positive_count(tool_result.get("total_reports"))
+        if score >= 75:
+            verdict = "malicious"
+            confidence = max(confidence, min(1.0, 0.75 + (score - 75) * 0.005))
+        elif score >= 25:
+            verdict = "suspicious"
+            confidence = max(confidence, min(0.85, 0.55 + (score - 25) * 0.006))
+        elif tool_result.get("is_whitelisted"):
+            verdict = "benign"
+            confidence = max(confidence, 0.6)
+        if score or reports:
+            summary_parts.append(
+                f"abuseipdb_score={score} reports={reports}"
+            )
+        if tool_result.get("is_tor"):
+            summary_parts.append("tor_exit_node")
 
     if not summary_parts and tool_result.get("data"):
         summary_parts.append("provider response available")

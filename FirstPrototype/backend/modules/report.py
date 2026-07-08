@@ -37,6 +37,7 @@ class ReportGenerator:
         iocs = investigation_state.get("iocs_extracted", []) or []
         tool_results = investigation_state.get("tool_results", []) or []
         timeline = investigation_state.get("attack_timeline", []) or []
+        total_extracted_iocs = len(iocs)
         raw_summary_text = (
             investigation_state.get("investigation_summary") or "No summary available."
         )
@@ -84,7 +85,7 @@ class ReportGenerator:
             },
             "executive_summary": executive_summary,
             "technical_findings": self._build_technical_findings(
-                anomalies, tool_results, ioc_analysis
+                anomalies, tool_results, ioc_analysis, total_extracted_iocs
             ),
             "ioc_analysis": ioc_analysis,
             "attack_timeline": attack_timeline,
@@ -102,6 +103,7 @@ class ReportGenerator:
             tool_results,
             timeline,
             attack_timeline,
+            total_extracted_iocs,
         )
 
         return report
@@ -168,9 +170,10 @@ class ReportGenerator:
         anomalies: List[Dict[str, Any]],
         tool_results: List[Dict[str, Any]],
         ioc_analysis: List[Dict[str, Any]],
+        total_extracted_iocs: int = 0,
     ) -> List[Dict[str, Any]]:
         return report_findings.build_technical_findings(
-            anomalies, tool_results, ioc_analysis
+            anomalies, tool_results, ioc_analysis, total_extracted_iocs
         )
 
     def _build_timeline(
@@ -194,6 +197,7 @@ class ReportGenerator:
         tool_results: List[Dict[str, Any]],
         raw_timeline: List[Dict[str, Any]],
         attack_timeline: List[Dict[str, Any]],
+        total_extracted_iocs: int = 0,
     ) -> None:
         return report_v2.add_report_v2_sections(
             report,
@@ -205,6 +209,7 @@ class ReportGenerator:
             tool_results,
             raw_timeline,
             attack_timeline,
+            total_extracted_iocs,
         )
 
     def _build_standards_profile(self) -> Dict[str, Any]:

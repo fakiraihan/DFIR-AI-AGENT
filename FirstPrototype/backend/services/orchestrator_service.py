@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 
 from app_context import OUTPUT_DIR, session_store, settings
+from services.export_service import build_export_artifacts
 from services.llm_service import build_role_client, get_ready_provider_snapshot
 from services.parsing_service import parse_with_profile, resolve_config_path
 
@@ -153,7 +154,6 @@ def run_investigation_pipeline(session_id: str):
         from modules.anomaly import detect_anomalies_in_logs
         from modules.agent import DFIRAgent
         from modules.gate_observations import append_gate_observations
-        from modules.llm_filter import LLMAnomalyFilter
         from modules.report import ReportGenerator
 
         provider_snapshot, provider_status = get_ready_provider_snapshot()
@@ -295,90 +295,50 @@ def run_investigation_pipeline(session_id: str):
             45,
         )
 
-        update_session_status(
-            session_id,
-            "anomaly_detection",
-            "🤖 LLM sedang menjalankan sanity gate batch anomalies...",
-            47,
-        )
-        print(f"\n{'=' * 80}")
-        print("STAGE 2.5: LLM ANOMALY FILTERING")
-        print(f"{'=' * 80}")
-        append_session_activity_event(
-            session_id,
-            "anomaly_detection",
-            f"{'=' * 60}\nLLM ANOMALY GATE (Batch Sanity Check)\n{'=' * 60}\nDeepLog detected: {len(anomalies_df)} anomalies\nRunning one coarse LLM sanity gate for the batch...",
-            progress=47,
-            level="stage",
-        )
-
-        filter_llm = build_role_client(provider_snapshot, role="filter")
-        llm_filter = LLMAnomalyFilter(
-            ollama_base_url=settings.ollama_base_url,
-            ollama_model=provider_snapshot.get("model", settings.ollama_model),
-            llm=filter_llm,
-            provider_name=provider_snapshot.get("provider", "ollama"),
-        )
-
-        print(f"Running batch anomaly gate for {len(anomalies_df)} anomalies with LLM...")
-        filtered_anomalies_df = llm_filter.filter_anomalies(anomalies_df, parsed_df)
-        recall_preserving_gate = (
-            _is_recall_preserving_deeplog_policy(settings.deeplog_decision_policy)
-            or str(getattr(settings, "deeplog_llm_filter_mode", "filter")).lower()
-            == "annotate"
-        )
-        if recall_preserving_gate:
-            investigation_anomalies_df = _merge_llm_gate_annotations(
-                anomalies_df,
-                filtered_anomalies_df,
-            )
-        else:
-            investigation_anomalies_df = filtered_anomalies_df
-        gate_policy = _first_dataframe_value(filtered_anomalies_df, "llm_gate_policy")
-        gate_active = _first_dataframe_value(filtered_anomalies_df, "llm_gate_active")
-        gate_priority_count = _count_dataframe_matches(
-            filtered_anomalies_df,
-            "llm_gate_priority",
-            {"critical_priority", "high_confidence", "needs_more_context"},
-        )
         session_store.update_session(
             session_id,
             {
                 "deeplog_anomalies": len(anomalies_df),
-                "llm_filtered_anomalies": len(filtered_anomalies_df),
-                "anomalies_count": len(investigation_anomalies_df),
-                "llm_gate_policy": gate_policy,
-                "llm_gate_active": bool(gate_active),
-                "llm_gate_priority_count": gate_priority_count,
-                "llm_gate_mode": "annotate" if recall_preserving_gate else "filter",
+                "anomalies_count": len(anomalies_df),
             },
         )
 
-        print(
-            f"✓ LLM Filter: {len(anomalies_df)} → {len(filtered_anomalies_df)} confirmed anomalies"
-        )
-        append_session_activity_event(
-            session_id,
-            "anomaly_detection",
-            (
-                f"{'=' * 60}\nLLM Batch Gate Results:\n"
-                f"  Input: {len(anomalies_df)} anomalies\n"
-                f"  Policy: {gate_policy or 'unknown'}\n"
-                f"  Output: {len(filtered_anomalies_df)} anomalies\n"
-                f"  Priority candidates: {gate_priority_count}\n"
-                f"{'=' * 60}"
-            ),
-            progress=50,
-            level="success",
-        )
-        update_session_status(
-            session_id,
-            "anomaly_detection",
-            f"✓ LLM batch gate: {len(anomalies_df)} → {len(investigation_anomalies_df)} retained anomalies",
-            50,
-        )
-
-        anomalies_df = investigation_anomalies_df
+        try:
+            latest_session = session_store.get_session(session_id, touch=False) or {}
+            export_artifacts = build_export_artifacts(
+                session_id=session_id,
+                file_name=session["file_name"],
+                output_session_dir=OUTPUT_DIR / session_id,
+                parsed_df=parsed_df,
+                results_df=results_df,
+                anomalies_df=anomalies_df,
+                selected_profile=selected_profile,
+            )
+            session_store.update_session(
+                session_id,
+                {
+                    "parsed_export_manifest_path": export_artifacts["manifest_path"],
+                    "parsed_export_jsonl_path": export_artifacts["jsonl_path"],
+                    "parsed_export_ndjson_path": export_artifacts["ndjson_path"],
+                    "parsed_export_csv_path": export_artifacts["csv_path"],
+                    "parsed_export_formats": ["jsonl", "ndjson", "csv", "manifest"],
+                },
+            )
+            append_session_activity_event(
+                session_id,
+                "anomaly_detection",
+                "Parsed log export artifacts generated: jsonl, ndjson, csv, manifest",
+                progress=52,
+                level="success",
+            )
+        except Exception as export_exc:
+            append_session_activity_event(
+                session_id,
+                "anomaly_detection",
+                f"Parsed log export artifact generation failed: {export_exc}",
+                progress=52,
+                level="warning",
+            )
 
         update_session_status(
             session_id, "ai_agent", "Menginisialisasi AI Agent...", 55
@@ -395,6 +355,32 @@ def run_investigation_pipeline(session_id: str):
         )
 
         agent_llm = build_role_client(provider_snapshot, role="agent")
+
+        _missing_intel_keys = [
+            name
+            for name, value in (
+                ("ABUSECH_API_KEY", settings.abusech_api_key),
+                ("ALIENVAULT_OTX_API_KEY", settings.alienvault_otx_api_key),
+                ("ABUSEIPDB_API_KEY", settings.abuseipdb_api_key),
+                ("VIRUSTOTAL_API_KEY", settings.virustotal_api_key),
+            )
+            if not value
+        ]
+        if _missing_intel_keys:
+            warn_msg = (
+                "Threat-intel API keys missing: "
+                + ", ".join(_missing_intel_keys)
+                + " - matching providers will return errors."
+            )
+            print(f"[WARN] {warn_msg}")
+            append_session_activity_event(
+                session_id,
+                "ai_agent",
+                warn_msg,
+                progress=55,
+                level="warning",
+            )
+
         agent = DFIRAgent(
             ollama_base_url=settings.ollama_base_url,
             ollama_model=provider_snapshot.get("model", settings.ollama_model),
@@ -402,6 +388,7 @@ def run_investigation_pipeline(session_id: str):
                 "abusech_api_key": settings.abusech_api_key,
                 "alienvault_otx_api_key": settings.alienvault_otx_api_key,
                 "greynoise_api_key": settings.greynoise_api_key,
+                "abuseipdb_api_key": settings.abuseipdb_api_key,
                 "virustotal_api_key": settings.virustotal_api_key,
             },
             llm=agent_llm,
@@ -435,7 +422,6 @@ def run_investigation_pipeline(session_id: str):
             file_name=session["file_name"],
             model_profile=selected_profile["name"],
             initial_anomalies_df=results_df[results_df["is_anomaly"] == True].copy(),
-            filtered_anomalies_df=anomalies_df,
             investigation_state=investigation_state,
             llm_provider=provider_snapshot.get("provider"),
             llm_model=provider_snapshot.get("model"),
@@ -555,68 +541,6 @@ def run_investigation_pipeline(session_id: str):
         print(f"Error: {e}")
         print(traceback.format_exc())
         print(f"{'=' * 80}\n")
-
-
-def _first_dataframe_value(df, column: str):
-    if df.empty or column not in df.columns:
-        return None
-    for value in df[column].tolist():
-        if value not in (None, ""):
-            return value
-    return None
-
-
-def _count_dataframe_matches(df, column: str, values: set[str]) -> int:
-    if df.empty or column not in df.columns:
-        return 0
-    return sum(1 for value in df[column].tolist() if str(value) in values)
-
-
-def _is_recall_preserving_deeplog_policy(policy: str | None) -> bool:
-    return str(policy or "").strip().lower() in {"f1_constrained_recall"}
-
-
-def _merge_llm_gate_annotations(candidates_df, filtered_df):
-    if candidates_df.empty or filtered_df.empty or "window_id" not in candidates_df.columns:
-        return candidates_df
-    if "window_id" not in filtered_df.columns:
-        return candidates_df
-
-    annotation_columns = [
-        column
-        for column in filtered_df.columns
-        if column.startswith("llm_") or column.startswith("current_llm_")
-    ]
-    if not annotation_columns:
-        return candidates_df
-
-    annotations = filtered_df[["window_id", *annotation_columns]].drop_duplicates(
-        subset=["window_id"],
-        keep="first",
-    )
-    merged_df = candidates_df.copy().merge(
-        annotations,
-        how="left",
-        on="window_id",
-        suffixes=("", "_llm_gate"),
-    )
-    if "llm_filtered" in merged_df.columns:
-        merged_df["llm_filtered"] = (
-            merged_df["llm_filtered"].where(merged_df["llm_filtered"].notna(), False).astype(bool)
-        )
-    else:
-        merged_df["llm_filtered"] = False
-    if "llm_gate_priority" in merged_df.columns:
-        merged_df["llm_gate_priority"] = merged_df["llm_gate_priority"].fillna(
-            "not_retained_by_llm_gate"
-        )
-    else:
-        merged_df["llm_gate_priority"] = "not_retained_by_llm_gate"
-    if "llm_gate_priority_rank" in merged_df.columns:
-        merged_df["llm_gate_priority_rank"] = merged_df["llm_gate_priority_rank"].fillna(9)
-    else:
-        merged_df["llm_gate_priority_rank"] = 9
-    return merged_df
 
 
 def _count_evaluation_statuses(df) -> dict[str, int]:

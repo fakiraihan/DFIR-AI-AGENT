@@ -1,5 +1,6 @@
 import io
 import json
+import os
 import pickle
 import shutil
 import tempfile
@@ -20,6 +21,10 @@ BACKEND_DIR = Path(__file__).resolve().parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+TEMP_ROOT = Path(tempfile.mkdtemp(prefix="dfir_backend_fix_batch_test_"))
+os.environ.setdefault("SESSION_CACHE_PATH", str(TEMP_ROOT / "session_cache"))
+os.environ.setdefault("AUTH_DB_PATH", str(TEMP_ROOT / "dfir_auth.sqlite3"))
+
 from main import (
     DATA_DIR,
     _parse_with_profile,
@@ -33,11 +38,13 @@ from logadempirical.models.lstm import DeepLog
 from session_store import SessionStore
 from modules.agent import DFIRAgent
 from modules.anomaly import DeepLogDetector
+from modules.auth_store import auth_store
 from modules.gate_observations import append_gate_observations, summarize_downstream_metrics
 from modules.llm_provider import LLMProviderError
 from modules.parsing import parse_log_file
 from modules.report import ReportGenerator
 from modules.threat_intel import ThreatIntelToolkit
+from services import storage_service
 
 
 class FakeLLM:
@@ -63,6 +70,7 @@ class FakeResponse:
 class BackendFixBatchTest(unittest.TestCase):
     def setUp(self):
         session_store.clear()
+        auth_store.clear_all()
         self.client = TestClient(app)
         self.original_max_upload_size_mb = settings.max_upload_size_mb
 
@@ -73,45 +81,67 @@ class BackendFixBatchTest(unittest.TestCase):
             if session_dir.exists():
                 shutil.rmtree(session_dir, ignore_errors=True)
         session_store.clear()
+        auth_store.clear_all()
+
+    def register_user(self, username="batchuser", email="batch@example.test"):
+        response = self.client.post(
+            "/api/auth/register",
+            json={
+                "username": username,
+                "email": email,
+                "password": "batch password",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        return response.json()["user"]
 
     def test_upload_rejects_oversized_file_with_client_error(self):
+        self.register_user()
         settings.max_upload_size_mb = 0
 
-        response = self.client.post(
-            "/api/upload",
-            files={"file": ("sample.log", b"1234567890", "text/plain")},
-        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(storage_service, "DATA_DIR", Path(tmpdir)):
+                response = self.client.post(
+                    "/api/upload",
+                    files={"file": ("sample.log", b"1234567890", "text/plain")},
+                )
 
         self.assertEqual(response.status_code, 413)
         self.assertEqual(len(session_store), 0)
 
     def test_upload_sanitizes_filename_and_generates_unique_session_ids(self):
-        response_one = self.client.post(
-            "/api/upload",
-            files={"file": ("../../bad name?.log", b"line 1", "text/plain")},
-        )
-        response_two = self.client.post(
-            "/api/upload",
-            files={"file": ("../../bad name?.log", b"line 2", "text/plain")},
-        )
+        self.register_user()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            upload_dir = Path(tmpdir)
+            with patch.object(storage_service, "DATA_DIR", upload_dir):
+                response_one = self.client.post(
+                    "/api/upload",
+                    files={"file": ("../../bad name?.log", b"line 1", "text/plain")},
+                )
+                response_two = self.client.post(
+                    "/api/upload",
+                    files={"file": ("../../bad name?.log", b"line 2", "text/plain")},
+                )
 
-        payload_one = response_one.json()
-        payload_two = response_two.json()
+                payload_one = response_one.json()
+                payload_two = response_two.json()
 
-        self.assertEqual(response_one.status_code, 200)
-        self.assertEqual(response_two.status_code, 200)
-        self.assertEqual(payload_one["file_name"], "bad_name_.log")
-        self.assertEqual(payload_two["file_name"], "bad_name_.log")
-        self.assertNotEqual(payload_one["session_id"], payload_two["session_id"])
+                self.assertEqual(response_one.status_code, 200)
+                self.assertEqual(response_two.status_code, 200)
+                self.assertEqual(payload_one["file_name"], "bad_name_.log")
+                self.assertEqual(payload_two["file_name"], "bad_name_.log")
+                self.assertNotEqual(payload_one["session_id"], payload_two["session_id"])
 
-        stored_path = Path(
-            session_store.get_session(payload_one["session_id"], touch=False)["file_path"]
-        )
-        self.assertEqual(stored_path.name, "bad_name_.log")
-        self.assertEqual(stored_path.parent.parent, DATA_DIR)
+                stored_path = Path(
+                    session_store.get_session(payload_one["session_id"], touch=False)["file_path"]
+                )
+                self.assertEqual(stored_path.name, "bad_name_.log")
+                self.assertEqual(stored_path.parent.parent, upload_dir)
 
     def test_start_investigation_preserves_provider_readiness_as_client_error(self):
+        user = self.register_user()
         session_store.set_session("session_test", {
+            "user_id": user["id"],
             "file_name": "sample.log",
             "file_path": str(DATA_DIR / "session_test" / "sample.log"),
             "status": "uploaded",
@@ -134,8 +164,9 @@ class BackendFixBatchTest(unittest.TestCase):
         self.assertIn("provider unavailable", response.json()["detail"])
 
     def test_session_store_persists_and_cleans_stale_raw_log_directories(self):
-        cache_dir = DATA_DIR.parent / "test_session_store_cache"
-        raw_logs_dir = DATA_DIR.parent / "test_session_store_raw_logs"
+        test_root = Path(tempfile.mkdtemp(prefix="dfir_session_store_paths_"))
+        cache_dir = test_root / "test_session_store_cache"
+        raw_logs_dir = test_root / "test_session_store_raw_logs"
         shutil.rmtree(cache_dir, ignore_errors=True)
         shutil.rmtree(raw_logs_dir, ignore_errors=True)
         raw_logs_dir.mkdir(parents=True, exist_ok=True)
@@ -166,6 +197,7 @@ class BackendFixBatchTest(unittest.TestCase):
         finally:
             shutil.rmtree(cache_dir, ignore_errors=True)
             shutil.rmtree(raw_logs_dir, ignore_errors=True)
+            shutil.rmtree(test_root, ignore_errors=True)
 
     def test_parse_csv_falls_back_to_local_drain_when_training_workspace_missing(self):
         with tempfile.NamedTemporaryFile(
@@ -217,21 +249,7 @@ class BackendFixBatchTest(unittest.TestCase):
         self.assertTrue(model_path.exists())
         self.assertTrue(vocab_path.exists())
 
-    def test_windows_loghub_profile_uses_trained_artifacts(self):
-        model_path = _resolve_config_path(settings.windows_loghub_deeplog_model_path)
-        vocab_path = _resolve_config_path(settings.windows_loghub_deeplog_vocab_path)
-
-        self.assertIn("output_windows_loghub_stratified_1gb", str(model_path))
-        self.assertIn("output_windows_loghub_stratified_1gb", str(vocab_path))
-        self.assertEqual(settings.windows_loghub_deeplog_window_size, 20)
-        self.assertEqual(
-            settings.windows_loghub_parser_template_strategy,
-            "windows_loghub_cbs",
-        )
-        self.assertTrue(model_path.exists())
-        self.assertTrue(vocab_path.exists())
-
-    def test_parse_with_profile_switches_to_windows_loghub_for_cbs_logs(self):
+    def test_parse_with_profile_keeps_general_for_cbs_text_logs(self):
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".log", delete=False, encoding="utf-8"
         ) as tmp:
@@ -245,74 +263,22 @@ class BackendFixBatchTest(unittest.TestCase):
 
         try:
             parsed_df, templates, profile = _parse_with_profile(log_path, settings, max_lines=50)
-            templates_text = "\n".join(parsed_df["event_template"].astype(str).tolist())
-
-            self.assertEqual(profile["name"], "windows_loghub")
-            self.assertEqual(
-                profile["template_strategy"],
-                settings.windows_loghub_parser_template_strategy,
-            )
-            self.assertEqual(profile["window_size"], 20)
-            self.assertGreaterEqual(len(parsed_df), 6)
-            self.assertGreaterEqual(len(templates), 1)
-            self.assertIn("CSI Info <NUM> Processing component <PATH> version <VERSION>", templates_text)
-            self.assertIn("CBS Warning Failed to internally open package. [HRESULT = <HEX>]", templates_text)
-            self.assertIn("CBS Error Store corruption detected at <TIME>", templates_text)
-        finally:
-            Path(log_path).unlink(missing_ok=True)
-
-    def test_parse_with_profile_falls_back_when_windows_loghub_parse_is_empty(self):
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".log", delete=False, encoding="utf-8"
-        ) as tmp:
-            for idx in range(6):
-                tmp.write(
-                    f"2016-09-28 04:30:3{idx}, Info                  CBS    Sample event {idx}.\n"
-                )
-            log_path = tmp.name
-
-        empty_windows_parse = pd.DataFrame(columns=["raw_line", "event_template"])
-        general_parse = pd.DataFrame(
-            [{"raw_line": "fallback event", "event_template": "fallback event"}]
-        )
-
-        try:
-            with patch(
-                "modules.parsing.parse_log_file",
-                side_effect=[
-                    (empty_windows_parse, []),
-                    (general_parse, ["fallback-template"]),
-                ],
-            ) as mock_parse:
-                parsed_df, templates, profile = _parse_with_profile(
-                    log_path,
-                    settings,
-                    max_lines=50,
-                )
 
             self.assertEqual(profile["name"], "general")
-            self.assertEqual(parsed_df.iloc[0]["event_template"], "fallback event")
-            self.assertEqual(templates, ["fallback-template"])
-            self.assertEqual(mock_parse.call_count, 2)
-            self.assertEqual(
-                mock_parse.call_args_list[0].kwargs["template_strategy"],
-                settings.windows_loghub_parser_template_strategy,
-            )
-            self.assertEqual(
-                mock_parse.call_args_list[1].kwargs["template_strategy"],
-                settings.parser_template_strategy,
-            )
+            self.assertEqual(profile["template_strategy"], settings.parser_template_strategy)
+            self.assertGreaterEqual(len(parsed_df), 6)
+            self.assertGreaterEqual(len(templates), 1)
         finally:
             Path(log_path).unlink(missing_ok=True)
 
-    def test_parse_with_profile_switches_to_sysmon_for_evtx_rows(self):
+    def test_parse_with_profile_switches_to_windows_sysmon_for_evtx_rows(self):
         first_parse = pd.DataFrame(
             [
                 {"raw_line": "Microsoft-Windows-Sysmon EventID=1", "event_template": "tmp1"},
                 {"raw_line": "Microsoft-Windows-Sysmon EventID=11", "event_template": "tmp2"},
             ]
         )
-        sysmon_parse = pd.DataFrame(
+        windows_sysmon_parse = pd.DataFrame(
             [
                 {
                     "raw_line": "Microsoft-Windows-Sysmon EventID=1",
@@ -323,12 +289,12 @@ class BackendFixBatchTest(unittest.TestCase):
 
         with patch(
             "modules.parsing.parse_log_file",
-            side_effect=[(first_parse, ["general-template"]), (sysmon_parse, ["sysmon-template"])],
+            side_effect=[(first_parse, ["general-template"]), (windows_sysmon_parse, ["windows-sysmon-template"])],
         ) as mock_parse:
             parsed_df, templates, profile = _parse_with_profile("sample.evtx", settings, max_lines=10)
 
-        self.assertEqual(profile["name"], "sysmon")
-        self.assertEqual(profile["template_strategy"], settings.sysmon_parser_template_strategy)
+        self.assertEqual(profile["name"], "windows_sysmon")
+        self.assertEqual(profile["template_strategy"], settings.windows_sysmon_parser_template_strategy)
         self.assertEqual(profile["template_enrichment"], "lmd_sysmon_v1")
         self.assertEqual(
             parsed_df.iloc[0]["OriginalEventTemplate"],
@@ -339,7 +305,7 @@ class BackendFixBatchTest(unittest.TestCase):
         self.assertIn("ImageClass=unknown", templates[0]["template"])
         self.assertEqual(mock_parse.call_count, 2)
 
-    def test_parse_with_profile_switches_non_sysmon_evtx_to_windows_apt(self):
+    def test_parse_with_profile_switches_non_sysmon_evtx_to_windows_evtx(self):
         first_parse = pd.DataFrame(
             [
                 {
@@ -352,7 +318,7 @@ class BackendFixBatchTest(unittest.TestCase):
                 },
             ]
         )
-        windows_apt_parse = pd.DataFrame(
+        windows_evtx_parse = pd.DataFrame(
             [
                 {
                     "raw_line": "Microsoft-Windows-Security-Auditing EventID=4624",
@@ -364,11 +330,11 @@ class BackendFixBatchTest(unittest.TestCase):
             ]
         )
 
-        with patch.object(settings, "evtx_general_deeplog_profile", "windows_apt"), patch(
+        with patch.object(settings, "evtx_general_deeplog_profile", "windows_evtx"), patch(
             "modules.parsing.parse_log_file",
             side_effect=[
                 (first_parse, ["general-template"]),
-                (windows_apt_parse, ["windows-apt-template"]),
+                (windows_evtx_parse, ["windows-evtx-template"]),
             ],
         ) as mock_parse:
             parsed_df, templates, profile = _parse_with_profile(
@@ -377,11 +343,11 @@ class BackendFixBatchTest(unittest.TestCase):
                 max_lines=10,
             )
 
-        self.assertEqual(profile["name"], "windows_apt")
-        self.assertEqual(profile["template_strategy"], settings.windows_apt_parser_template_strategy)
-        self.assertEqual(profile["topk"], settings.windows_apt_deeplog_topk)
+        self.assertEqual(profile["name"], "windows_evtx")
+        self.assertEqual(profile["template_strategy"], settings.windows_evtx_parser_template_strategy)
+        self.assertEqual(profile["topk"], settings.windows_evtx_deeplog_topk)
         self.assertIn("EventID 4624 Provider", parsed_df.iloc[0]["event_template"])
-        self.assertEqual(templates, ["windows-apt-template"])
+        self.assertEqual(templates, ["windows-evtx-template"])
         self.assertEqual(mock_parse.call_count, 2)
 
     def test_gate_observation_logging_records_retained_and_dropped_windows(self):
@@ -419,18 +385,9 @@ class BackendFixBatchTest(unittest.TestCase):
                 },
             ]
         )
-        filtered_anomalies = initial_anomalies.iloc[[0]].copy()
-        filtered_anomalies["llm_gate_policy"] = "keep_high_confidence_only"
-        filtered_anomalies["llm_reason"] = "Prioritaskan anomaly kuat"
-        filtered_anomalies["llm_gate_mode"] = "batch_sanity"
-        filtered_anomalies["llm_gate_priority"] = "high_confidence"
-        filtered_anomalies["llm_gate_priority_rank"] = 2
-        filtered_anomalies["llm_gate_active"] = True
-        filtered_anomalies["llm_gate_confidence"] = 0.77
-        filtered_anomalies["llm_gate_requested_context"] = ""
-        filtered_anomalies["llm_gate_prioritized_window_ids"] = "[1]"
         investigation_state = {
-            "anomalies": filtered_anomalies.to_dict("records"),
+            "anomalies": [initial_anomalies.iloc[0].to_dict()],
+            "triage_labels": {"1": "suspicious", "2": "noise"},
             "iocs_extracted": [{"type": "hash", "value": "abc"}],
             "tool_results": [
                 {"ioc": "abc", "classification": "malicious", "tool": "test"}
@@ -448,7 +405,6 @@ class BackendFixBatchTest(unittest.TestCase):
                 file_name="sample.evtx",
                 model_profile="general",
                 initial_anomalies_df=initial_anomalies,
-                filtered_anomalies_df=filtered_anomalies,
                 investigation_state=investigation_state,
                 llm_provider="ollama",
                 llm_model="slm-gate",
@@ -458,19 +414,12 @@ class BackendFixBatchTest(unittest.TestCase):
 
         self.assertEqual(count, 2)
         self.assertEqual(len(records), 2)
-        self.assertTrue(records[0]["current_llm_gate"]["retained_for_investigation"])
-        self.assertEqual(
-            records[0]["current_llm_gate"]["decision"],
-            "escalate_to_investigation",
-        )
-        self.assertEqual(records[0]["current_llm_gate"]["priority"], "high_confidence")
-        self.assertEqual(records[0]["current_llm_gate"]["priority_rank"], 2)
-        self.assertTrue(records[0]["current_llm_gate"]["active"])
-        self.assertEqual(records[0]["current_llm_gate"]["confidence"], 0.77)
-        self.assertEqual(records[0]["current_llm_gate"]["prioritized_window_ids"], [1])
-        self.assertFalse(records[1]["current_llm_gate"]["retained_for_investigation"])
-        self.assertEqual(records[1]["current_llm_gate"]["decision"], "drop_or_archive")
-        self.assertEqual(records[1]["current_llm_gate"]["priority"], "not_retained")
+        self.assertEqual(records[0]["triage"]["verdict"], "suspicious")
+        self.assertTrue(records[0]["triage"]["retained_for_investigation"])
+        self.assertEqual(records[0]["triage"]["decision"], "escalate_to_investigation")
+        self.assertEqual(records[1]["triage"]["verdict"], "noise")
+        self.assertFalse(records[1]["triage"]["retained_for_investigation"])
+        self.assertEqual(records[1]["triage"]["decision"], "drop_as_noise")
         self.assertEqual(records[0]["indicator_counts"], {"image": 1})
         self.assertEqual(records[0]["investigation_result"]["malicious_hit_count"], 1)
         self.assertEqual(records[0]["investigation_result"]["utility_label_hint"], "high_value")

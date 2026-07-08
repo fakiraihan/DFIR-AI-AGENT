@@ -22,7 +22,6 @@ def append_gate_observations(
     file_name: str,
     model_profile: str,
     initial_anomalies_df: Any,
-    filtered_anomalies_df: Any,
     investigation_state: dict[str, Any],
     llm_provider: str | None = None,
     llm_model: str | None = None,
@@ -34,11 +33,11 @@ def append_gate_observations(
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    retained_window_ids = _window_id_set(filtered_anomalies_df)
-    gate_policy = _first_non_empty(filtered_anomalies_df, "llm_gate_policy")
-    gate_reason = _first_non_empty(filtered_anomalies_df, "llm_reason")
-    gate_mode = _first_non_empty(filtered_anomalies_df, "llm_gate_mode")
-    filtered_gate_rows = _records_by_window_id(filtered_anomalies_df)
+    triage_labels: dict[str, str] = (investigation_state or {}).get("triage_labels") or {}
+    investigated_window_ids = {
+        str(_safe_int(a.get("window_id")))
+        for a in ((investigation_state or {}).get("anomalies") or [])
+    }
     downstream_metrics = summarize_downstream_metrics(investigation_state)
     generated_at = datetime.now().isoformat()
 
@@ -46,10 +45,11 @@ def append_gate_observations(
     with open(path, "a", encoding="utf-8") as handle:
         for _, anomaly in initial_anomalies_df.iterrows():
             window_id = _safe_int(anomaly.get("window_id"))
-            retained = window_id in retained_window_ids
-            gate_row = filtered_gate_rows.get(window_id, {})
+            window_id_str = str(window_id)
+            triage_verdict = triage_labels.get(window_id_str, "not_triaged")
+            retained = window_id_str in investigated_window_ids
             record = {
-                "schema_version": 1,
+                "schema_version": 2,
                 "generated_at": generated_at,
                 "session_id": session_id,
                 "file_name": file_name,
@@ -74,24 +74,10 @@ def append_gate_observations(
                 "indicator_counts": _indicator_counts(
                     anomaly.get("window_key_indicators") or {}
                 ),
-                "current_llm_gate": {
-                    "mode": gate_mode or "not_recorded",
-                    "policy": gate_policy or "not_recorded",
-                    "reason": gate_reason or "",
-                    "priority": str(gate_row.get("llm_gate_priority") or "not_retained"),
-                    "priority_rank": _safe_int(gate_row.get("llm_gate_priority_rank")),
-                    "active": bool(gate_row.get("llm_gate_active", False)),
-                    "confidence": _safe_float(gate_row.get("llm_gate_confidence")),
-                    "requested_context": str(
-                        gate_row.get("llm_gate_requested_context") or ""
-                    ),
-                    "prioritized_window_ids": _parse_window_id_json(
-                        gate_row.get("llm_gate_prioritized_window_ids")
-                    ),
+                "triage": {
+                    "verdict": triage_verdict,
                     "retained_for_investigation": retained,
-                    "decision": "escalate_to_investigation"
-                    if retained
-                    else "drop_or_archive",
+                    "decision": "escalate_to_investigation" if retained else "drop_as_noise",
                 },
                 "investigation_result": downstream_metrics,
                 "human_label": None,
@@ -150,46 +136,6 @@ def _utility_label_hint(
     if len(summary.strip()) >= 160:
         return "medium_value"
     return "low_value"
-
-
-def _window_id_set(df: Any) -> set[int]:
-    if df.empty or "window_id" not in df.columns:
-        return set()
-    return {_safe_int(value) for value in df["window_id"].tolist()}
-
-
-def _first_non_empty(df: Any, column: str) -> str:
-    if df.empty or column not in df.columns:
-        return ""
-    for value in df[column].tolist():
-        text = str(value or "").strip()
-        if text:
-            return text
-    return ""
-
-
-def _records_by_window_id(df: Any) -> dict[int, dict[str, Any]]:
-    if df.empty or "window_id" not in df.columns:
-        return {}
-
-    records: dict[int, dict[str, Any]] = {}
-    for _, row in df.iterrows():
-        window_id = _safe_int(row.get("window_id"))
-        if window_id:
-            records[window_id] = row.to_dict()
-    return records
-
-
-def _parse_window_id_json(value: Any) -> list[int]:
-    if isinstance(value, list):
-        return [_safe_int(item) for item in value if _safe_int(item) > 0]
-    try:
-        parsed = json.loads(str(value or "[]"))
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return []
-    if not isinstance(parsed, list):
-        return []
-    return [_safe_int(item) for item in parsed if _safe_int(item) > 0]
 
 
 def _indicator_counts(indicators: Any) -> dict[str, int]:

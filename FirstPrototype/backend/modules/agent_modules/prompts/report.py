@@ -91,7 +91,7 @@ def create_report_prompt(
 
     return f"""# DFIR Executive Summary Report - ReAct Framework
 
-Anda adalah Chief Security Officer TNI AL yang akan mempresentasikan hasil investigasi kepada stakeholder.
+Anda adalah Chief Security Officer yang akan mempresentasikan hasil investigasi kepada stakeholder.
 Tugas: Buat laporan investigasi DFIR yang PANJANG, KAYA INFORMASI, COMPREHENSIVE, ACTIONABLE, dan PROFESIONAL.
 
 ATURAN OUTPUT WAJIB:
@@ -129,125 +129,56 @@ ATURAN OUTPUT WAJIB:
 ### Investigation Reasoning Chain
 {reasoning_summary}
 
-## REACT REPORT GENERATION PROCESS
+## ANALYSIS CHECKLIST INTERNAL
 
-### THOUGHT 1: Incident Classification
-**Question:** Apa tingkat severity insiden ini?
-- Berapa banyak IOC malicious terconfirm?
-- Apakah ada indikasi data exfiltration atau system compromise?
-- Seberapa besar scope dampak?
+Gunakan checklist ini hanya untuk berpikir, bukan untuk ditulis ulang:
+- Severity harus mengikuti evidence: jumlah IOC malicious/suspicious, kualitas tool result, konteks log, timeline, dan gap data.
+- Attack analysis harus menyebut event/window/IOC/timeline yang benar-benar tersedia.
+- Impact assessment harus tetap "belum cukup bukti" bila tidak ada bukti compromise, exfiltration, atau objective achieved.
+- Remediation harus berupa tindakan DFIR spesifik terhadap artifact yang terlihat.
 
-**Classification Criteria:**
-- **CRITICAL:** Multiple confirmed malware, C2 communication, data exfiltration evidence
-- **HIGH:** Confirmed malware presence, suspicious IOCs, potential compromise
-- **MEDIUM:** Some suspicious activity, unclear threat, possible false positives
-- **LOW:** Mostly benign anomalies, no confirmed threats
+## OUTPUT CONTRACT
 
-### THOUGHT 2: Attack Analysis
-**Question:** Apa yang sebenarnya terjadi?
-- Apa attack vector yang digunakan?
-- Teknik apa yang teridentifikasi (MITRE ATT&CK)?
-- Apakah ini targeted attack atau opportunistic?
+Tulis laporan final dalam Bahasa Indonesia formal dengan heading berikut:
 
-### THOUGHT 3: Impact Assessment
-**Question:** Apa dampak dan risikonya?
-- System/data apa yang terpengaruh?
-- Apakah attacker berhasil achieve objectives?
-- Apa risiko lanjutan jika tidak ditangani?
-
-### THOUGHT 4: Remediation Priority
-**Question:** Apa yang harus dilakukan immediately?
-- Isolation/containment?
-- IOC blocking?
-- Forensics collection?
-- System hardening?
-
-## OUTPUT REQUIREMENTS
-
-Generate comprehensive report dalam Bahasa Indonesia dengan struktur:
-
-### 1. RINGKASAN EKSEKUTIF (Executive Summary)
-**[3-4 paragraf profesional]**
-
-Paragraf 1: **Incident Overview**
-- Kapan investigasi dilakukan
-- Berapa anomali dan IOC ditemukan
-- Verdict: Apakah ini genuine threat atau false positive dominan
-
-Paragraf 2: **Threat Identification**
-- Malware family atau threat actor (jika teridentifikasi)
-- Attack vector dan teknik yang digunakan
-- IOC malicious yang terconfirm
-
-Paragraf 3: **Impact Assessment**
-- Scope compromise (jika ada)
-- Data/systems yang terpengaruh
-- Potential damage atau risk
-
-Paragraf 4: **Recommended Actions**
-- Immediate actions (containment)
-- Short-term mitigation
-- Long-term improvements
+### 1. RINGKASAN EKSEKUTIF
+Tulis tiga sampai empat paragraf naratif yang langsung menyimpulkan insiden, evidence utama, severity, confidence, limitasi, dan tindakan prioritas. Jangan menulis daftar pertanyaan atau kerangka penulisan.
 
 ### 2. TINGKAT SEVERITY
-**Classification:** [CRITICAL/HIGH/MEDIUM/LOW]
-**Confidence Level:** [High/Medium/Low]
+Tuliskan classification sebagai CRITICAL, HIGH, MEDIUM, atau LOW. Tuliskan confidence sebagai High, Medium, atau Low. Berikan justifikasi dua sampai tiga kalimat yang mengikat severity ke evidence.
 
-**Justification:** [2-3 kalimat explaining severity rating]
+### 3. INDIKATOR KOMPROMI UTAMA
+Tuliskan IOC paling relevan yang benar-benar ada pada input. Untuk setiap IOC, sebutkan tipe, hasil enrichment, evidence pendukung, dan tindakan yang tepat. Jika tidak ada IOC malicious terkonfirmasi, katakan dengan jelas.
 
-### 3. INDIKATOR KOMPROMI UTAMA (Key IOCs)
-List 5-10 IOC paling penting dengan konteks:
-- IOC value
-- Type (IP/domain/hash/URL)
-- Threat classification
-- Recommended action (block/monitor/investigate)
+### 4. MITRE ATT&CK MAPPING
+Tuliskan mapping hanya jika didukung event, process, registry, network, share, atau artifact lain pada evidence. Jika tidak cukup bukti untuk technique tertentu, tulis bahwa technique belum dapat ditetapkan.
 
-### 4. MITRE ATT&CK MAPPING (Jika Applicable)
-Map temuan ke MITRE ATT&CK Framework:
-- **Tactic:** [e.g., Initial Access, Execution, Persistence]
-- **Technique:** [e.g., T1566 Phishing, T1059 Command Execution]
-- **Evidence:** [Supporting evidence dari logs/IOCs]
-
-### 5. ATTACK TIMELINE (Jika Teridentifikasi)
-Kronologi serangan:
-- Initial compromise
-- Lateral movement (if any)
-- Objective achievement
-- Detection point
+### 5. ATTACK TIMELINE
+Susun kronologi dari timeline dan window anomali yang tersedia. Jangan menciptakan tahap initial compromise, lateral movement, objective achieved, atau exfiltration jika tidak ada evidence.
 
 ### 6. DAMPAK POTENSIAL
-- **Technical Impact:** System compromise, data exposure, service disruption
-- **Business Impact:** Operational impact, reputational risk, compliance issues
-- **Risk Rating:** Quantify risk level
+Bedakan impact yang terbukti, impact potensial, dan area yang belum dapat dinilai. Jangan menaikkan anomaly count menjadi compromise count.
 
-### 7. RECOMMENDATIONS (Prioritized)
-**Immediate (0-24 hours):**
-1. [Action item with specific steps]
-2. [Action item with specific steps]
-
-**Short-term (1-7 days):**
-1. [Mitigation measure]
-2. [Investigation follow-up]
-
-**Long-term (Strategic):**
-1. [Security improvement]
-2. [Process enhancement]
+### 7. RECOMMENDATIONS
+Tulis rekomendasi prioritas untuk immediate, short-term, dan long-term. Setiap rekomendasi harus menyebut artifact nyata seperti window ID, EventID, user, host, process, path, registry, share, IOC, atau tool result.
 
 ## WRITING GUIDELINES
 
 **Tone:** Profesional, faktual, actionable
-**Language:** Bahasa Indonesia formal (untuk laporan TNI AL)
-**Evidence-based:** Setiap claim harus didukung data
+**Language:** Bahasa Indonesia formal untuk laporan Security
+**Evidence-based:** Setiap claim penting harus didukung data
 **Actionable:** Recommendations harus spesifik dan implementable
-**Balanced:** Jika tidak ada threat confirmed, clearly state itu adalah false positive atau benign activity
+**Balanced:** Jika tidak ada threat confirmed, nyatakan bahwa evidence belum cukup untuk verdict malicious final
 
 **AVOID:**
+- Mengulang prompt, checklist, atau instruksi ini
+- Menulis placeholder, contoh format, daftar pertanyaan, atau catatan pengerjaan
 - Spekulasi tanpa evidence
-- Teknis jargon berlebihan (explain untuk non-technical stakeholders)
-- Understatement threat (if genuine)
-- Overstatement threat (if false positive)
+- Teknis jargon berlebihan
+- Understatement threat jika genuine
+- Overstatement threat jika evidence belum cukup
 
-Tulis laporan final sekarang dalam Bahasa Indonesia. Jangan awali dengan penjelasan bahwa Anda akan menulis laporan. Jangan tampilkan placeholder.
+Tulis laporan final sekarang dalam Bahasa Indonesia. Mulai langsung dari heading pertama.
 
 ### 1. RINGKASAN EKSEKUTIF
 """

@@ -248,7 +248,7 @@ def validate_structured_samples(
     if not structured_csv.exists():
         return
 
-    profile = build_model_profile("windows_apt", settings)
+    profile = build_model_profile("windows_evtx", settings)
     detector = _detector(profile, max(topk_values))
     df = pd.read_csv(
         structured_csv,

@@ -13,7 +13,14 @@ from config import settings as env_settings
 SECRET_FIELDS = {
     "gemini": {"api_key"},
     "openrouter": {"api_key"},
+    "groq": {"api_key"},
 }
+
+
+def _groq_reasoning_effort(model: str) -> str:
+    if str(model or "").startswith("groq/compound"):
+        return ""
+    return env_settings.llm_groq_reasoning_effort
 
 
 def _settings_file_path() -> Path:
@@ -26,7 +33,7 @@ def _settings_file_path() -> Path:
 
 def _default_settings() -> Dict[str, Any]:
     return {
-        "selected_provider": "ollama",
+        "selected_provider": env_settings.llm_forced_provider or "ollama",
         "providers": {
             "ollama": {
                 "enabled": True,
@@ -47,6 +54,14 @@ def _default_settings() -> Dict[str, Any]:
                 "model": env_settings.openrouter_model,
                 "api_key": "",
                 "max_tokens": env_settings.llm_openrouter_max_tokens,
+            },
+            "groq": {
+                "enabled": False,
+                "base_url": env_settings.groq_base_url,
+                "model": env_settings.groq_model,
+                "api_key": env_settings.groq_api_key,
+                "max_completion_tokens": env_settings.llm_groq_max_completion_tokens,
+                "reasoning_effort": _groq_reasoning_effort(env_settings.groq_model),
             },
         },
     }
@@ -74,7 +89,25 @@ def _read_runtime_settings() -> Dict[str, Any]:
 
 
 def get_effective_llm_settings() -> Dict[str, Any]:
-    return _deep_merge(_default_settings(), _read_runtime_settings())
+    effective = _deep_merge(_default_settings(), _read_runtime_settings())
+    forced_provider = str(env_settings.llm_forced_provider or "").strip()
+    if forced_provider:
+        effective["selected_provider"] = forced_provider
+        provider = effective.get("providers", {}).get(forced_provider)
+        if isinstance(provider, dict):
+            provider["enabled"] = True
+            if forced_provider == "groq":
+                provider["base_url"] = env_settings.groq_base_url
+                provider["model"] = env_settings.groq_model
+                if env_settings.groq_api_key:
+                    provider["api_key"] = env_settings.groq_api_key
+                provider["max_completion_tokens"] = (
+                    env_settings.llm_groq_max_completion_tokens
+                )
+                provider["reasoning_effort"] = _groq_reasoning_effort(
+                    env_settings.groq_model
+                )
+    return effective
 
 
 def get_public_llm_settings() -> Dict[str, Any]:

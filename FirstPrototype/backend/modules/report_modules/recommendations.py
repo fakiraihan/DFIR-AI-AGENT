@@ -5,6 +5,82 @@ import re
 
 from . import common
 
+_VALUE_TOKEN_RE = re.compile(r"`[^`]*`|\b\d+(?:\.\d+)*\b|\b[0-9a-f]{8,}\b")
+_STOPWORDS = {
+    "dan", "atau", "yang", "pada", "dengan", "untuk", "dari", "ke", "di",
+    "sebelum", "agar", "bisa", "serta", "berikut", "ini", "itu", "the", "and",
+}
+
+NIST_PHASE_KEYWORDS: List[Tuple[str, Tuple[str, ...]]] = [
+    ("Containment", ("containment", "isolasi", "isolir", "blokir", "block", "hunt", "sinkhole", "quarantine")),
+    ("Eradication", ("eradication", "hapus", "karantina", "remove", "bersihkan", "cabut akses")),
+    ("Recovery", ("recovery", "pulihkan", "restore", "reimage", "recover")),
+    ("Detection & Analysis", ("validasi", "triase", "kumpulkan", "rekonstruksi", "korelasikan", "monitor", "review", "analisis")),
+]
+
+
+def nist_phase_for(text: str) -> str:
+    """Map a recommendation sentence to the closest NIST SP 800-61 phase."""
+    lowered = text.lower()
+    for phase, keywords in NIST_PHASE_KEYWORDS:
+        if any(keyword in lowered for keyword in keywords):
+            return phase
+    return "Detection & Analysis"
+
+
+def _similarity_key(text: str) -> frozenset:
+    """Word-set key with IOC values/numbers stripped, for near-duplicate detection."""
+    stripped = _VALUE_TOKEN_RE.sub(" ", text.lower())
+    words = {word for word in re.findall(r"[a-z]+", stripped) if word not in _STOPWORDS and len(word) > 2}
+    return frozenset(words)
+
+
+def _is_near_duplicate(candidate_key: frozenset, kept_keys: List[frozenset], threshold: float = 0.65) -> bool:
+    for kept in kept_keys:
+        if not candidate_key or not kept:
+            continue
+        overlap = len(candidate_key & kept)
+        union = len(candidate_key | kept)
+        if union and overlap / union >= threshold:
+            return True
+    return False
+
+
+# Each rule requires ALL keywords in the tuple to be present (AND), so a
+# generic verb like "validasi" alone can't collide with an unrelated but
+# specific recommendation (e.g. "Validasi ... unquoted service path" is not
+# IOC validation just because it contains the word "validasi").
+_ACTION_CATEGORY_RULES: List[Tuple[str, Tuple[str, ...]]] = [
+    ("ioc_block", ("ioc", "blokir")),
+    ("ioc_block", ("ioc", "block")),
+    ("ioc_validate", ("ioc", "validasi")),
+    ("ioc_enrich", ("ioc", "enrich")),
+    ("artifact_collection", ("kumpulkan", "artefak")),
+    ("window_triage", ("triase", "window")),
+    ("timeline_reconstruction", ("timeline",)),
+    # NOTE: no bare "containment" rule -- severity-triggered full containment
+    # and the proportional short-term containment for suspicious-only IOCs
+    # are legitimately distinct recommendations that happen to share the
+    # word "containment"; a single-keyword category here would collapse them.
+]
+
+
+def _action_category(text: str) -> str | None:
+    """Coarse action-intent bucket, to cap same-intent recommendations at one.
+
+    Same-intent recommendations restated by the LLM in different words (mixed
+    Indonesian/English paraphrase) share too little raw vocabulary for the
+    Jaccard near-duplicate check above to catch them, so this pass groups by
+    the underlying action verb + object instead. Rules require all keywords
+    to co-occur to avoid collapsing unrelated recommendations that merely
+    share one generic verb.
+    """
+    lowered = text.lower()
+    for category, keywords in _ACTION_CATEGORY_RULES:
+        if all(keyword in lowered for keyword in keywords):
+            return category
+    return None
+
 
 def build_contextual_recommendations(
     severity: str,
@@ -40,6 +116,19 @@ def build_contextual_recommendations(
         recommendations.append(
             f"Validasi IOC suspicious berikut sebelum eskalasi: {format_ioc_values(suspicious_iocs[:5])}; korelasikan dengan host, user, dan timestamp pada window sumbernya."
         )
+        # Proportionate short-term containment for suspicious (not yet
+        # confirmed-malicious) IOCs: NIST 800-61 treats enhanced monitoring /
+        # rate-limiting as a legitimate light-touch containment strategy,
+        # distinct from full block/isolate which would overclaim compromise
+        # on suspicious-only evidence.
+        recommendations.append(
+            f"Sebagai containment jangka pendek yang proporsional, terapkan monitoring intensif dan rate-limiting sementara pada IOC suspicious berikut hingga statusnya terkonfirmasi, tanpa tindakan pemutusan akses permanen: {format_ioc_values(suspicious_iocs[:5])}."
+        )
+
+    if malicious_iocs:
+        recommendations.append(
+            "Pasca penanganan temuan malicious di atas, periksa integritas host terkait sebelum kembali ke operasi normal (recovery); pertimbangkan reimage bila ditemukan mekanisme persistence tambahan pada host tersebut."
+        )
 
     if top_anomaly:
         recommendations.append(
@@ -49,6 +138,10 @@ def build_contextual_recommendations(
     if affected_artifacts:
         recommendations.append(
             f"Kumpulkan artefak host yang terkait dengan {affected_artifacts}: event log lengkap, process execution evidence, registry/persistence keys, dan network connection history."
+        )
+        first_artifact = affected_artifacts.split(",")[0].strip()
+        recommendations.append(
+            f"Jalankan query EDR/SIEM dengan filter {first_artifact} pada rentang waktu insiden untuk memvalidasi eksekusi, proses induk, dan koneksi jaringan terkait sebelum menyimpulkan false positive/positive."
         )
 
     if timeline:
@@ -96,9 +189,11 @@ def normalize_recommendations(
     anomalies: List[Dict[str, Any]],
     ioc_analysis: List[Dict[str, Any]],
 ) -> List[str]:
-    """Clean, deduplicate, and cap report recommendations."""
+    """Clean, deduplicate near-duplicates, tag NIST phase, and cap report recommendations."""
     normalized: List[str] = []
-    seen = set()
+    seen: set = set()
+    kept_keys: List[frozenset] = []
+    seen_categories: set = set()
     for recommendation in recommendations:
         cleaned = clean_recommendation(recommendation)
         if not cleaned:
@@ -106,7 +201,16 @@ def normalize_recommendations(
         key = cleaned.lower()
         if key in seen:
             continue
+        category = _action_category(cleaned)
+        if category is not None and category in seen_categories:
+            continue
+        similarity_key = _similarity_key(cleaned)
+        if _is_near_duplicate(similarity_key, kept_keys):
+            continue
         seen.add(key)
+        kept_keys.append(similarity_key)
+        if category is not None:
+            seen_categories.add(category)
         normalized.append(cleaned)
 
     if not normalized:
@@ -121,7 +225,8 @@ def normalize_recommendations(
             "Prioritaskan pengecekan IOC dengan threat level tertinggi pada endpoint, firewall, proxy, atau kontrol deteksi yang tersedia."
         )
 
-    return normalized[:8]
+    tagged = [f"[{nist_phase_for(item)}] {item}" for item in normalized[:8]]
+    return tagged
 
 
 def select_priority_anomaly(anomalies: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -149,7 +254,7 @@ def format_anomaly_context(anomaly: Dict[str, Any]) -> str:
     score = anomaly.get("anomaly_score") or anomaly.get("score")
     if score is not None:
         try:
-            parts.append(f"score {float(score):.3f}")
+            parts.append(f"score {float(score):.4f}")
         except (TypeError, ValueError):
             parts.append(f"score {score}")
 

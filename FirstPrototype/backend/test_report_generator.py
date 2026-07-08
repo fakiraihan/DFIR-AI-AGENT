@@ -528,8 +528,55 @@ class ReportGeneratorTest(unittest.TestCase):
 
         ioc_entry = report["ioc_analysis"][0]
         self.assertEqual(ioc_entry["threat_level"], "high")
+        self.assertEqual(ioc_entry["indicator"], "IP: 8.8.8.8")
+        self.assertEqual(ioc_entry["indicator_type"], "IP")
         self.assertIn("malicious=4", ioc_entry["threat_intel"])
         self.assertEqual(report["mitre_attack_mapping"]["techniques"], [])
+
+    def test_report_v2_surfaces_strongest_compromise_indicators(self):
+        report = self.generator.generate_report(
+            session_id="indicator-session",
+            file_name="indicator.evtx",
+            investigation_state=self._build_v2_state(
+                anomalies=[
+                    {
+                        "window_id": 42,
+                        "anomaly_score": 0.987,
+                        "strict_is_anomaly": True,
+                        "actual_event": "Microsoft-Windows-Sysmon EventID=3",
+                        "anomalous_line": {
+                            "important_fields": {
+                                "image": "powershell.exe",
+                                "command_line": "powershell -enc AAA",
+                                "destination_ip": "203.0.113.50",
+                            }
+                        },
+                        "window_key_indicators": {"destination_ip": ["203.0.113.50"]},
+                    }
+                ],
+                iocs=[
+                    {
+                        "type": "ip",
+                        "value": "203.0.113.50",
+                        "source_line": 10,
+                        "window_id": 42,
+                    }
+                ],
+                tool_results=[
+                    {"tool": "virustotal", "ioc": "203.0.113.50", "malicious": 4}
+                ],
+            ),
+        )
+
+        strongest = report["detection_analysis"]["strongest_compromise_indicators"]
+        strongest_text = json.dumps(strongest, ensure_ascii=False)
+
+        self.assertGreaterEqual(len(strongest), 2)
+        self.assertIn("IP: 203.0.113.50", strongest_text)
+        self.assertIn("threat-intel", strongest_text)
+        self.assertIn("window 42", strongest_text)
+        self.assertIn("DeepLog score 0.987", strongest_text)
+        self.assertTrue(any("EV-TOOL-" in item["evidence_ids"][0] for item in strongest if item["evidence_ids"]))
 
     def test_report_v2_missing_provenance_uses_unknown_and_not_available_defaults(self):
         report = self.generator.generate_report(
@@ -575,11 +622,15 @@ class ReportGeneratorTest(unittest.TestCase):
         )
 
         self.assertEqual(len(report["ioc_analysis"]), 25)
-        self.assertEqual(len(report["evidence_provenance"]["items"]), 60)
+        # 30 anomalies (chronological cap; none strict/high-score) + 35 tool
+        # results: the first 30 plus the 5 positive-verdict results beyond the
+        # cap, which must stay evidenced so severity/recommendations remain
+        # citable. All 35 tool results here carry suspicious=1.
+        self.assertEqual(len(report["evidence_provenance"]["items"]), 65)
         self.assertEqual(report["evidence_provenance"]["items"][0]["evidence_id"], "EV-LOG-001")
         self.assertEqual(report["evidence_provenance"]["items"][29]["evidence_id"], "EV-LOG-030")
         self.assertEqual(report["evidence_provenance"]["items"][30]["evidence_id"], "EV-TOOL-031")
-        self.assertEqual(report["evidence_provenance"]["items"][-1]["evidence_id"], "EV-TOOL-060")
+        self.assertEqual(report["evidence_provenance"]["items"][-1]["evidence_id"], "EV-TOOL-065")
 
     def test_mitre_mapping_maps_powershell_command_to_t1059_001(self):
         state = {
@@ -922,6 +973,10 @@ class ReportGeneratorTest(unittest.TestCase):
             self.assertIn(value, markdown)
         for recommendation in report["recommendations"]:
             self.assertIn(recommendation, markdown)
+        self.assertIn("### Highest-Signal Anomaly Windows", markdown)
+        self.assertIn("- IP: 203.0.113.50", markdown)
+        self.assertIn("1. ", markdown)
+        self.assertNotIn("- Review PowerShell evidence EV-LOG-001 before containment.", markdown)
         for technique in report["mitre_attack_mapping"]["techniques"]:
             for evidence_id in technique["evidence_ids"]:
                 self.assertIn(evidence_id, markdown)

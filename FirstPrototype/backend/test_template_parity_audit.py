@@ -41,9 +41,9 @@ class TemplateParityAuditTest(unittest.TestCase):
         self.assertEqual(runtime_template, expected)
         self.assertEqual(runtime_cluster, expected)
 
-    def test_windows_apt_evtx_runtime_uses_metadata_order(self):
+    def test_windows_evtx_metadata_runtime_uses_metadata_order(self):
         parser = DrainParser.__new__(DrainParser)
-        parser.template_strategy = "windows_apt_evtx"
+        parser.template_strategy = "windows_evtx_metadata"
 
         runtime_template, runtime_cluster = parser._build_evtx_template(
             "Microsoft-Windows-Security-Auditing",

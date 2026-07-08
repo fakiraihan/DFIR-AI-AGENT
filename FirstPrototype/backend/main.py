@@ -9,9 +9,24 @@ dedicated routers/services so checking and audit can focus on smaller units.
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
+import sys
+
+
+def _configure_stdio() -> None:
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (ValueError, OSError):
+                pass
+
+
+_configure_stdio()
 
 from app_context import DATA_DIR, MODELS_DIR, OUTPUT_DIR, session_store, settings
-from routers import health, investigation, settings as settings_router, upload
+from routers import auth, health, investigation, settings as settings_router, upload
 from schemas.llm import LLMSettingsPayload, ProviderSettingsPayload
 from services.orchestrator_service import run_investigation_pipeline, update_session_status
 from services.parsing_service import parse_with_profile as _parse_with_profile
@@ -38,6 +53,7 @@ app.add_middleware(
 )
 
 app.include_router(health.router)
+app.include_router(auth.router)
 app.include_router(settings_router.router)
 app.include_router(upload.router)
 app.include_router(investigation.router)

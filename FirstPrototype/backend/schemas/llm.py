@@ -12,9 +12,11 @@ class ProviderSettingsPayload(BaseModel):
     num_predict: int | None = None
     max_tokens: int | None = None
     max_output_tokens: int | None = None
+    max_completion_tokens: int | None = None
+    reasoning_effort: str | None = None
     clear_api_key: bool = False
 
 
 class LLMSettingsPayload(BaseModel):
-    selected_provider: str = Field(pattern="^(ollama|gemini|openrouter)$")
+    selected_provider: str = Field(pattern="^(ollama|gemini|openrouter|groq)$")
     providers: dict[str, ProviderSettingsPayload] = Field(default_factory=dict)

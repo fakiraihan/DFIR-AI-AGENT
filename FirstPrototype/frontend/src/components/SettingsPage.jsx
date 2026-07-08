@@ -42,7 +42,7 @@ const ProviderLogo = ({ providerKey }) => {
       )
     case 'gemini':
       return (
-        <Box sx={{ width: size, height: size, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#10b981' }}>
+        <Box sx={{ width: size, height: size, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#818cf8' }}>
           <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ width: '100%', height: '100%' }}>
             <path d="M12 2L14.4 9.6L22 12L14.4 14.4L12 22L9.6 14.4L2 12L9.6 9.6L12 2Z" fill="currentColor"/>
           </svg>
@@ -220,7 +220,7 @@ function SettingsPage() {
     <Box sx={{ maxWidth: 1120, mx: 'auto', width: '100%', py: 4 }}>
       <Stack direction={{ xs: 'column', lg: 'row' }} justifyContent="space-between" spacing={3} sx={{ mb: 4 }}>
         <Box sx={{ maxWidth: 760 }}>
-          <Typography variant="overline" color="primary.main" sx={{ fontWeight: 600, letterSpacing: '0.05em' }}>
+          <Typography variant="overline" color="primary.main" sx={{ fontWeight: 600, letterSpacing: 0 }}>
             Provider Configuration
           </Typography>
           <Typography variant="h3" sx={{ mt: 0.75, mb: 1.25, fontWeight: 700, color: '#F8FAFC' }}>
@@ -247,7 +247,7 @@ function SettingsPage() {
         </Alert>
       )}
 
-      <Paper elevation={0} sx={{ p: { xs: 2.5, md: 4 }, borderRadius: 4, mb: 4, bgcolor: 'rgba(15, 23, 42, 0.62)', backdropFilter: 'blur(14px)', border: '1px solid rgba(148, 163, 184, 0.16)' }}>
+      <Paper elevation={0} sx={{ p: { xs: 2.5, md: 4 }, borderRadius: 2, mb: 4, bgcolor: 'rgba(15, 23, 42, 0.84)', border: '1px solid rgba(148, 163, 184, 0.16)' }}>
         <Stack direction={{ xs: 'column', md: 'row' }} spacing={3} alignItems={{ xs: 'stretch', md: 'center' }} justifyContent="space-between">
           <Box>
             <Typography variant="h6" sx={{ color: '#F8FAFC', fontWeight: 600 }}>Active provider</Typography>
@@ -281,8 +281,8 @@ function SettingsPage() {
               variant="outlined"
               sx={{ fontWeight: 600 }}
             />
-            <Chip label={`Model: ${activeProviderStatus.model || '—'}`} variant="outlined" sx={{ bgcolor: 'rgba(255,255,255,0.03)' }} />
-            <Chip label={`Latency: ${activeProviderStatus.latency_ms ?? '—'} ms`} variant="outlined" sx={{ bgcolor: 'rgba(255,255,255,0.03)' }} />
+            <Chip label={`Model: ${activeProviderStatus.model || 'Unavailable'}`} variant="outlined" sx={{ bgcolor: 'rgba(255,255,255,0.03)' }} />
+            <Chip label={`Latency: ${activeProviderStatus.latency_ms ?? 'Unavailable'} ms`} variant="outlined" sx={{ bgcolor: 'rgba(255,255,255,0.03)' }} />
           </Stack>
         )}
       </Paper>
@@ -295,7 +295,7 @@ function SettingsPage() {
 
           return (
             <Grid item xs={12} lg={4} key={providerName}>
-              <Paper elevation={0} sx={{ p: 3.5, borderRadius: 4, height: '100%', bgcolor: 'rgba(15, 23, 42, 0.4)', backdropFilter: 'blur(10px)', border: '1px solid', borderColor: selectedProvider === providerName ? 'primary.main' : 'rgba(148, 163, 184, 0.16)' }}>
+              <Paper elevation={0} sx={{ p: 3, borderRadius: 2, height: '100%', bgcolor: 'rgba(15, 23, 42, 0.78)', border: '1px solid', borderColor: selectedProvider === providerName ? 'primary.main' : 'rgba(148, 163, 184, 0.16)' }}>
                 <Stack spacing={3}>
                   <Box>
                     <Stack direction="row" justifyContent="space-between" spacing={1.5} alignItems="center">
@@ -364,7 +364,7 @@ function SettingsPage() {
         })}
       </Grid>
 
-      <Paper elevation={0} sx={{ p: { xs: 2.5, md: 4 }, borderRadius: 4, bgcolor: 'rgba(245, 158, 11, 0.03)', border: '1px solid rgba(245, 158, 11, 0.2)' }}>
+      <Paper elevation={0} sx={{ p: { xs: 2.5, md: 4 }, borderRadius: 2, bgcolor: 'rgba(245, 158, 11, 0.06)', border: '1px solid rgba(245, 158, 11, 0.2)' }}>
         <Typography variant="h6" gutterBottom sx={{ color: '#fbbf24', display: 'flex', alignItems: 'center', gap: 1 }}>
           <ErrorOutlineRoundedIcon /> Local-first policy
         </Typography>

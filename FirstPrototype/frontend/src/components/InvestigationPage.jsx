@@ -1,26 +1,26 @@
 import React, { useState, useEffect, Suspense, lazy, useRef } from 'react'
 import axios from 'axios'
-const MarkdownRenderer = lazy(() => import('./MarkdownRenderer'))
 const PDFExportTemplate = lazy(() => import('./PDFExportTemplate'))
 import { 
   Box, Typography, Paper, Button, Alert, CircularProgress, 
-  Chip, Stack, Grid, LinearProgress, Divider, Menu, MenuItem, ListItemIcon,
-  Stepper, Step, StepLabel, Tabs, Tab
+  Chip, Stack, Grid, Menu, MenuItem, ListItemIcon,
+  Stepper, Step, StepLabel
 } from '@mui/material'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline'
-import TimelineIcon from '@mui/icons-material/Timeline'
 import AddBoxIcon from '@mui/icons-material/AddBox'
 import ShieldOutlinedIcon from '@mui/icons-material/ShieldOutlined'
 import ArrowOutwardRoundedIcon from '@mui/icons-material/ArrowOutwardRounded'
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf'
 import DescriptionIcon from '@mui/icons-material/Description'
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown'
-import BugReportIcon from '@mui/icons-material/BugReport'
-import LightbulbIcon from '@mui/icons-material/Lightbulb'
-import ArticleIcon from '@mui/icons-material/Article'
+import TableChartIcon from '@mui/icons-material/TableChart'
+import DataObjectIcon from '@mui/icons-material/DataObject'
+import CloudUploadOutlinedIcon from '@mui/icons-material/CloudUploadOutlined'
+import FactCheckOutlinedIcon from '@mui/icons-material/FactCheckOutlined'
+import ReportDashboard from './ReportDashboard'
 
-import { exportToDocx, exportToPdf } from '../utils/exportUtils'
+import { PDF_EXPORT_WIDTH_PX, exportToDocx, exportToPdf, saveFile } from '../utils/exportUtils'
 
 const formatDisplayDate = (value) => {
   const parsedDate = new Date(value)
@@ -65,7 +65,7 @@ const buildExportSummary = ({ sessionId, status, report }) => {
   if (Array.isArray(report?.attack_timeline) && report.attack_timeline.length > 0) {
     exportSections.push('', '## Attack timeline', '')
     report.attack_timeline.forEach((event) => {
-      exportSections.push(`- ${formatDisplayDate(event.timestamp)} — ${event.event || 'Unknown event'}`)
+      exportSections.push(`- ${formatDisplayDate(event.timestamp)}: ${event.event || 'Unknown event'}`)
 
       if (event.details) {
         exportSections.push(`  - ${event.details}`)
@@ -75,8 +75,204 @@ const buildExportSummary = ({ sessionId, status, report }) => {
 
   if (Array.isArray(report?.recommendations) && report.recommendations.length > 0) {
     exportSections.push('', '## Recommendations', '')
-    report.recommendations.forEach((recommendation) => {
-      exportSections.push(`- ${recommendation}`)
+    report.recommendations.forEach((recommendation, index) => {
+      exportSections.push(`${index + 1}. ${recommendation}`)
+    })
+  }
+
+  return exportSections.join('\n')
+}
+
+const asArray = (value) => (Array.isArray(value) ? value : [])
+
+const compactText = (value, fallback = 'Not available') => {
+  if (value === null || value === undefined || value === '') return fallback
+  return String(value).replace(/\s+/g, ' ').trim() || fallback
+}
+
+const markdownCell = (value) => compactText(value).replace(/\|/g, '\\|')
+
+const pushTable = (sections, headers, rows) => {
+  if (!rows.length) return
+  sections.push(`| ${headers.join(' | ')} |`)
+  sections.push(`| ${headers.map(() => '---').join(' | ')} |`)
+  rows.forEach((row) => {
+    sections.push(`| ${row.map(markdownCell).join(' | ')} |`)
+  })
+  sections.push('')
+}
+
+const buildExportSummaryV2 = ({ sessionId, status, report }) => {
+  const metadata = report?.metadata || {}
+  const caseOverview = report?.case_overview || {}
+  const detection = report?.detection_analysis || {}
+  const methodology = report?.methodology || {}
+  const impact = report?.impact_assessment || {}
+  const confidence = report?.limitations_confidence || {}
+  const evidenceItems = asArray(report?.evidence_provenance?.items)
+  const logEvidence = evidenceItems.filter((item) => item.type === 'log_window')
+  const toolEvidence = evidenceItems.filter((item) => item.type === 'tool_result')
+  const findings = asArray(detection.findings)
+  const strongestIndicators = asArray(detection.strongest_compromise_indicators)
+  const iocs = asArray(report?.ioc_analysis)
+  const recommendations = asArray(report?.recommendations)
+  const timeline = asArray(report?.appendices?.timeline).length
+    ? asArray(report?.appendices?.timeline)
+    : asArray(report?.attack_timeline)
+  const mitreTechniques = asArray(report?.mitre_attack_mapping?.techniques)
+  const limitations = asArray(confidence.limitations)
+  const components = asArray(methodology.tools).join(', ') || 'Drain, DeepLog, LLM anomaly gate, DFIR agent, report generator'
+  const alertSummary = [
+    `${detection.anomaly_count ?? asArray(report?.attack_timeline).length ?? 0} anomaly windows`,
+    `${detection.ioc_count ?? iocs.length} curated IOCs`,
+    `${detection.tool_result_count ?? toolEvidence.length} threat-intel results`,
+    `${mitreTechniques.length} ATT&CK mappings`,
+  ].join('; ')
+
+  const exportSections = [
+    '# 3. Detection and Analysis',
+    '',
+    `- Session ID: ${sessionId}`,
+    `- Report ID: ${metadata.report_id || 'Unavailable'}`,
+    `- Case Status: ${caseOverview.case_status || 'Not assessed'}`,
+    `- Generated: ${formatDisplayDate(metadata.timestamp || caseOverview.generated_at)}`,
+    `- Workflow Status: ${status?.status || 'unknown'}`,
+    '',
+  ]
+
+  exportSections.push('## 3.1 Detection Overview', '')
+  pushTable(exportSections, ['Field', 'Value'], [
+    ['Waktu deteksi', formatDisplayDate(metadata.timestamp || caseOverview.generated_at)],
+    ['Sumber log', caseOverview.log_file || metadata.log_file],
+    ['Komponen deteksi', components],
+    ['Ringkasan alert/anomali', alertSummary],
+    ['Basis penilaian', caseOverview.assessment_basis || 'Generated from available investigation evidence.'],
+  ])
+
+  if (report?.executive_summary) {
+    exportSections.push('### Executive Summary', '', report.executive_summary, '')
+  }
+
+  exportSections.push('## 3.2 Anomaly Details', '')
+  if (strongestIndicators.length) {
+    pushTable(exportSections, ['Indicator', 'Category', 'Strength', 'Reason', 'Evidence'], strongestIndicators.map((item) => [
+      item.indicator,
+      item.category,
+      item.strength,
+      item.reason,
+      asArray(item.evidence_ids).join(', '),
+    ]))
+  }
+  if (logEvidence.length || findings.length) {
+    pushTable(exportSections, ['Evidence ID', 'Event/template', 'Parameter penting', 'Host/user/process', 'Relevance'], (
+      logEvidence.length ? logEvidence : findings
+    ).slice(0, 15).map((item, index) => {
+      const relatedFinding = findings[index] || {}
+      return [
+        item.evidence_id || relatedFinding.finding_id,
+        item.description || relatedFinding.title,
+        relatedFinding.detail || item.reference,
+        'Not available in the current report payload',
+        item.reference || asArray(relatedFinding.evidence_ids).join(', '),
+      ]
+    }))
+  } else {
+    exportSections.push('Tidak ada anomaly detail terstruktur pada payload report.', '')
+  }
+
+  exportSections.push('## 3.3 Evidence Collection', '')
+  pushTable(exportSections, ['Evidence type', 'Evidence collected', 'Reference'], [
+    ['Log evidence', `${logEvidence.length} anomalous log-window evidence item(s)`, logEvidence.map((item) => item.evidence_id).join(', ') || 'Not available'],
+    ['IOC evidence', `${iocs.length} curated IOC(s)`, iocs.slice(0, 8).map((ioc) => ioc.indicator || ioc.value).join(', ') || 'Not available'],
+    ['Process/network evidence', findings.map((finding) => finding.title).join('; ') || 'Not available'],
+    ['Threat intelligence evidence', `${toolEvidence.length} enrichment evidence item(s)`, toolEvidence.map((item) => item.evidence_id).join(', ') || 'Not available'],
+  ])
+
+  if (evidenceItems.length > 0) {
+    pushTable(exportSections, ['ID', 'Type', 'Reference', 'Description'], evidenceItems.slice(0, 25).map((item) => [
+      item.evidence_id,
+      item.type,
+      item.reference,
+      item.description,
+    ]))
+  }
+
+  exportSections.push('## 3.4 Timeline Reconstruction', '')
+  if (timeline.length) {
+    pushTable(exportSections, ['Time', 'Event', 'Details', 'Evidence'], timeline.slice(0, 20).map((event) => [
+      formatDisplayDate(event.timestamp),
+      event.event || event.event_template,
+      event.details || event.description,
+      event.evidence_id || event.evidence_reference,
+    ]))
+  } else {
+    exportSections.push('Timeline belum tersedia atau timestamp tidak cukup untuk rekonstruksi kronologis.', '')
+  }
+
+  exportSections.push('## 3.5 IOC and Threat Intelligence Correlation', '')
+  if (iocs.length) {
+    pushTable(exportSections, ['Indicator', 'Type', 'Reputation result', 'Interpretation'], iocs.slice(0, 25).map((ioc) => [
+      ioc.indicator || ioc.value,
+      ioc.indicator_type || ioc.type,
+      ioc.threat_intel,
+      ioc.threat_level ? `Threat level: ${ioc.threat_level}` : 'Requires analyst validation',
+    ]))
+  } else {
+    exportSections.push('Tidak ada IOC terkurasi yang tersedia pada report.', '')
+  }
+
+  if (toolEvidence.length) {
+    pushTable(exportSections, ['Tool evidence', 'Target', 'Result'], toolEvidence.slice(0, 20).map((item) => [
+      item.evidence_id,
+      item.reference,
+      item.description,
+    ]))
+  }
+
+  exportSections.push('## 3.6 Scope and Impact Analysis', '')
+  pushTable(exportSections, ['Scope / impact field', 'Assessment'], [
+    ['Host terdampak', 'Not assessed from current report payload'],
+    ['User terdampak', 'Not assessed from current report payload'],
+    ['Business impact', impact.business_impact],
+    ['Operational impact', impact.operational_impact],
+    ['Data exposure', impact.data_exposure],
+    ['Service disruption', impact.service_disruption],
+    ['Recoverability', impact.recoverability],
+  ])
+
+  if (limitations.length > 0) {
+    exportSections.push('### Keterbatasan Analisis', '')
+    limitations.forEach((limitation) => exportSections.push(`- ${limitation}`))
+    exportSections.push('')
+  }
+
+  exportSections.push('## 3.7 Severity, Confidence, and Classification', '')
+  pushTable(exportSections, ['Classification field', 'Value'], [
+    ['Jenis insiden', mitreTechniques.length ? mitreTechniques.map((item) => item.tactic).join(', ') : report?.mitre_attack_mapping?.status || 'Not assessed'],
+    ['Severity', metadata.severity || caseOverview.severity || 'Not assessed'],
+    ['Confidence', confidence.confidence_level || 'Low'],
+    ['Dasar penilaian', caseOverview.assessment_basis || alertSummary],
+  ])
+
+  if (mitreTechniques.length) {
+    pushTable(exportSections, ['Technique', 'Tactic', 'Confidence', 'Rationale'], mitreTechniques.map((technique) => [
+      `${technique.technique_id || '-'} ${technique.technique_name || ''}`.trim(),
+      technique.tactic,
+      technique.confidence,
+      technique.rationale,
+    ]))
+  }
+
+  exportSections.push('## 3.8 Detection and Analysis Conclusion', '')
+  exportSections.push(
+    `Berdasarkan report ini, analisis mendeteksi ${alertSummary}. Severity diklasifikasikan sebagai ${metadata.severity || caseOverview.severity || 'Not assessed'} dengan confidence ${confidence.confidence_level || 'Low'}. Kesimpulan tetap dibatasi pada evidence yang tersedia dan perlu divalidasi dengan telemetry host, EDR, SIEM, DNS/proxy, serta konteks asset inventory sebelum containment berskala besar.`,
+    '',
+  )
+
+  if (recommendations.length) {
+    exportSections.push('### Initial Containment / Response Recommendations', '')
+    recommendations.slice(0, 10).forEach((recommendation, index) => {
+      exportSections.push(`${index + 1}. ${compactText(recommendation)}`)
     })
   }
 
@@ -127,28 +323,9 @@ const getAgentEventColor = (level) => {
   if (level === 'success') return '#86efac'
   if (level === 'warning') return '#fbbf24'
   if (level === 'error') return '#fb7185'
-  if (level === 'stage') return '#67e8f9'
+  if (level === 'stage') return '#bfdbfe'
   if (level === 'status') return '#c4b5fd'
   return '#CBD5E1'
-}
-
-const TabPanel = (props) => {
-  const { children, value, index, ...other } = props
-  return (
-    <div
-      role="tabpanel"
-      hidden={value !== index}
-      id={`report-tabpanel-${index}`}
-      aria-labelledby={`report-tab-${index}`}
-      {...other}
-    >
-      {value === index && (
-        <Box sx={{ pt: 3 }}>
-          {children}
-        </Box>
-      )}
-    </div>
-  )
 }
 
 const InvestigationPage = ({ sessionId, onBackToUpload, onSessionMissing }) => {
@@ -160,7 +337,6 @@ const InvestigationPage = ({ sessionId, onBackToUpload, onSessionMissing }) => {
   const currentProgressRef = useRef(0)
   const [exportAnchorEl, setExportAnchorEl] = useState(null)
   const [isExporting, setIsExporting] = useState(false)
-  const [activeTab, setActiveTab] = useState(0)
   const pdfExportRef = useRef(null)
   const exportMenuOpen = Boolean(exportAnchorEl)
 
@@ -169,8 +345,7 @@ const InvestigationPage = ({ sessionId, onBackToUpload, onSessionMissing }) => {
     { id: 'upload', label: 'Upload & Session', match: ['upload', 'session'] },
     { id: 'parsing', label: 'Log Parsing', match: ['parse', 'parsing'] },
     { id: 'anomaly_detection', label: 'DeepLog Detection', match: ['anomaly', 'deeplog'] },
-    { id: 'llm_filter', label: 'LLM Anomaly Gate', match: ['filter', 'gate'] },
-    { id: 'ai_agent', label: 'AI Agent Investigation', match: ['agent', 'investigat'] },
+    { id: 'ai_agent', label: 'JejakAgent Investigation', match: ['agent', 'investigat', 'triage'] },
     { id: 'threat_intel', label: 'Threat Intel Enrichment', match: ['intel', 'enrich'] },
     { id: 'report_generation', label: 'Report Generation', match: ['report'] }
   ];
@@ -200,15 +375,14 @@ const InvestigationPage = ({ sessionId, onBackToUpload, onSessionMissing }) => {
     severity === 'MEDIUM' ? 'warning' :
     severity === 'LOW' ? 'info' : 'default'
 
-  const metricCards = [
-    { label: 'Parsed Logs', value: status?.summary?.parsed_logs ?? 'N/A' },
-    { label: 'Templates', value: status?.summary?.templates ?? 'N/A' },
-    { label: 'Anomalies', value: status?.summary?.anomalies ?? status?.summary?.anomaly_count ?? 'N/A' },
-    { label: 'IOCs', value: report?.ioc_analysis?.length ?? 'N/A' }
-  ];
   const activityEvents = Array.isArray(status?.activity_events) ? status.activity_events : []
   const latestAgentEvent = activityEvents[activityEvents.length - 1]
   const shouldShowAgentTerminal = Boolean(status && status.status !== 'completed' && !report)
+  const liveInvestigationStats = [
+    { label: 'Anomaly windows', value: status?.summary?.anomalies ?? status?.summary?.anomaly_count ?? 'Pending', tone: '#bfdbfe' },
+    { label: 'Curated IOCs', value: status?.summary?.iocs ?? status?.summary?.ioc_count ?? 'Pending', tone: '#93c5fd' },
+    { label: 'Evidence items', value: status?.summary?.evidence_items ?? status?.summary?.evidence_count ?? 'Pending', tone: '#fcd34d' },
+  ]
 
   useEffect(() => {
     let timeoutId = null
@@ -300,12 +474,13 @@ const InvestigationPage = ({ sessionId, onBackToUpload, onSessionMissing }) => {
     if (!report) return
     setIsExporting(true)
     try {
-      const fileContents = buildExportSummary({ sessionId, status, report })
+      const fileContents = buildExportSummaryV2({ sessionId, status, report })
       const reportLabel = report.metadata?.report_id || sessionId
       const fileName = `${reportLabel}-summary.docx`
       await exportToDocx(fileContents, fileName)
     } catch (exportError) {
       console.error('Failed to export DOCX:', exportError)
+      window.alert(`DOCX export failed: ${exportError?.message || 'Unknown export error'}`)
     } finally {
       setIsExporting(false)
     }
@@ -321,6 +496,55 @@ const InvestigationPage = ({ sessionId, onBackToUpload, onSessionMissing }) => {
       await exportToPdf(pdfExportRef.current, fileName)
     } catch (exportError) {
       console.error('Failed to export PDF:', exportError)
+    } finally {
+      setIsExporting(false)
+    }
+  }
+
+  const handleExportParsedLogs = async (format) => {
+    handleExportMenuClose()
+    if (!sessionId) return
+    setIsExporting(true)
+    try {
+      const response = await axios.get(`/api/export/${sessionId}`, {
+        params: { format },
+        responseType: 'blob',
+      })
+      const fallbackNames = {
+        jsonl: `${sessionId}-parsed-logs.jsonl`,
+        ndjson: `${sessionId}-elastic-bulk.ndjson`,
+        csv: `${sessionId}-parsed-logs.csv`,
+        manifest: `${sessionId}-export-manifest.json`,
+      }
+      const acceptTypeMap = {
+        jsonl: {
+          description: 'JSON Lines',
+          accept: { 'application/x-ndjson': ['.jsonl'] },
+        },
+        ndjson: {
+          description: 'NDJSON',
+          accept: { 'application/x-ndjson': ['.ndjson'] },
+        },
+        csv: {
+          description: 'CSV',
+          accept: { 'text/csv': ['.csv'] },
+        },
+        manifest: {
+          description: 'JSON',
+          accept: { 'application/json': ['.json'] },
+        },
+      }
+
+      const contentDisposition = response.headers?.['content-disposition'] || ''
+      const fileNameMatch = contentDisposition.match(/filename="?([^"]+)"?/i)
+      const fileName = fileNameMatch?.[1] || fallbackNames[format] || `${sessionId}-export.dat`
+
+      await saveFile(response.data, fileName, acceptTypeMap[format] || {
+        description: 'File',
+        accept: { 'application/octet-stream': ['.*'] }
+      })
+    } catch (exportError) {
+      console.error(`Failed to export parsed logs (${format}):`, exportError)
     } finally {
       setIsExporting(false)
     }
@@ -359,10 +583,10 @@ const InvestigationPage = ({ sessionId, onBackToUpload, onSessionMissing }) => {
   return (
     <Box sx={{ maxWidth: 1200, mx: 'auto', width: '100%', py: 4 }}>
       {/* Top Summary Card */}
-      <Paper elevation={0} sx={{ p: 4, mb: 4, borderRadius: 4, bgcolor: 'rgba(15, 23, 42, 0.62)', backdropFilter: 'blur(14px)', border: '1px solid rgba(148, 163, 184, 0.16)' }}>
+      <Paper elevation={0} sx={{ p: 4, mb: 4, borderRadius: 2, bgcolor: 'rgba(15, 23, 42, 0.84)', border: '1px solid rgba(148, 163, 184, 0.16)' }}>
         <Grid container spacing={3} alignItems="center" justifyContent="space-between">
           <Grid item xs={12} md={7}>
-            <Typography variant="overline" sx={{ color: 'primary.main', fontWeight: 600, letterSpacing: '0.05em' }}>
+            <Typography variant="overline" sx={{ color: 'primary.main', fontWeight: 600, letterSpacing: 0 }}>
               Session Active
             </Typography>
             <Typography variant="h4" sx={{ mt: 0.5, mb: 1, fontWeight: 700, color: '#F8FAFC' }}>
@@ -397,7 +621,7 @@ const InvestigationPage = ({ sessionId, onBackToUpload, onSessionMissing }) => {
                 startIcon={<ArrowOutwardRoundedIcon />} 
                 endIcon={<KeyboardArrowDownIcon />}
                 onClick={handleExportMenuClick} 
-                disabled={!report || isExporting}
+                disabled={isExporting || (!report && status?.status !== 'completed')}
                 sx={{ bgcolor: 'rgba(15, 23, 42, 0.5)' }}
               >
                 {isExporting ? 'Exporting...' : 'Export Report'}
@@ -407,16 +631,32 @@ const InvestigationPage = ({ sessionId, onBackToUpload, onSessionMissing }) => {
                 open={exportMenuOpen}
                 onClose={handleExportMenuClose}
                 PaperProps={{
-                  sx: { bgcolor: 'rgba(15, 23, 42, 0.9)', backdropFilter: 'blur(10px)', border: '1px solid rgba(255,255,255,0.1)' }
+                  sx: { bgcolor: 'rgba(15, 23, 42, 0.96)', border: '1px solid rgba(255,255,255,0.1)' }
                 }}
               >
-                <MenuItem onClick={handleExportPdf} sx={{ color: '#F8FAFC' }}>
+                <MenuItem onClick={handleExportPdf} disabled={!report} sx={{ color: '#F8FAFC' }}>
                   <ListItemIcon><PictureAsPdfIcon fontSize="small" sx={{ color: '#f43f5e' }} /></ListItemIcon>
                   Export PDF
                 </MenuItem>
-                <MenuItem onClick={handleExportDocx} sx={{ color: '#F8FAFC' }}>
+                <MenuItem onClick={handleExportDocx} disabled={!report} sx={{ color: '#F8FAFC' }}>
                   <ListItemIcon><DescriptionIcon fontSize="small" sx={{ color: '#3b82f6' }} /></ListItemIcon>
                   Export DOCX
+                </MenuItem>
+                <MenuItem onClick={() => handleExportParsedLogs('jsonl')} sx={{ color: '#F8FAFC' }}>
+                  <ListItemIcon><DataObjectIcon fontSize="small" sx={{ color: '#bfdbfe' }} /></ListItemIcon>
+                  Export Parsed JSONL
+                </MenuItem>
+                <MenuItem onClick={() => handleExportParsedLogs('ndjson')} sx={{ color: '#F8FAFC' }}>
+                  <ListItemIcon><CloudUploadOutlinedIcon fontSize="small" sx={{ color: '#93c5fd' }} /></ListItemIcon>
+                  Export Elastic NDJSON
+                </MenuItem>
+                <MenuItem onClick={() => handleExportParsedLogs('csv')} sx={{ color: '#F8FAFC' }}>
+                  <ListItemIcon><TableChartIcon fontSize="small" sx={{ color: '#f59e0b' }} /></ListItemIcon>
+                  Export Parsed CSV
+                </MenuItem>
+                <MenuItem onClick={() => handleExportParsedLogs('manifest')} sx={{ color: '#F8FAFC' }}>
+                  <ListItemIcon><FactCheckOutlinedIcon fontSize="small" sx={{ color: '#c4b5fd' }} /></ListItemIcon>
+                  Download Export Manifest
                 </MenuItem>
               </Menu>
               <Button variant="contained" startIcon={<AddBoxIcon />} onClick={onBackToUpload}>
@@ -429,7 +669,7 @@ const InvestigationPage = ({ sessionId, onBackToUpload, onSessionMissing }) => {
 
       {/* Progress & Stepper */}
       {status && (
-        <Paper elevation={0} sx={{ p: 4, mb: 4, borderRadius: 4, bgcolor: 'rgba(15, 23, 42, 0.4)', backdropFilter: 'blur(10px)', border: '1px solid rgba(255,255,255,0.05)' }}>
+        <Paper elevation={0} sx={{ p: 4, mb: 4, borderRadius: 2, bgcolor: 'rgba(15, 23, 42, 0.72)', border: '1px solid rgba(255,255,255,0.08)' }}>
           <Box sx={{ display: 'flex', alignItems: 'center', mb: 3 }}>
             <Box sx={{ width: '100%', mr: 2 }}>
               <Box 
@@ -448,11 +688,12 @@ const InvestigationPage = ({ sessionId, onBackToUpload, onSessionMissing }) => {
                     left: 0,
                     height: '100%',
                     width: `${Math.max(0, Math.min(100, displayProgress))}%`,
-                    backgroundImage: status.status === 'completed' 
-                      ? 'linear-gradient(90deg, #10b981 0%, #34d399 100%)' 
+                    backgroundImage: 'none',
+                    backgroundColor: status.status === 'completed' 
+                      ? '#2563eb' 
                       : status.status === 'error'
-                      ? 'linear-gradient(90deg, #f43f5e 0%, #fb7185 100%)'
-                      : 'linear-gradient(90deg, #6366f1 0%, #06b6d4 100%)',
+                      ? '#be123c'
+                      : '#2563eb',
                     borderRadius: 6,
                     transition: 'none', // Handled smoothly by requestAnimationFrame
                   }}
@@ -474,7 +715,7 @@ const InvestigationPage = ({ sessionId, onBackToUpload, onSessionMissing }) => {
                   StepIconProps={{
                     sx: {
                       color: 'rgba(255,255,255,0.1) !important',
-                      '&.Mui-active': { color: '#06b6d4 !important' },
+                      '&.Mui-active': { color: '#2563eb !important' },
                       '&.Mui-completed': { color: '#10b981 !important' },
                       '& text': { fill: '#fff !important', fontWeight: 600 }
                     }
@@ -488,10 +729,31 @@ const InvestigationPage = ({ sessionId, onBackToUpload, onSessionMissing }) => {
             ))}
           </Stepper>
           
-          <Box sx={{ mt: 3, p: 2, bgcolor: 'rgba(255,255,255,0.02)', borderRadius: 2, border: '1px solid rgba(255,255,255,0.05)' }}>
-              <Typography variant="caption" color="text.secondary" display="block" sx={{ textTransform: 'uppercase', letterSpacing: '0.05em', mb: 0.5 }}>Current Message</Typography>
-              <Typography variant="body2" sx={{ color: '#F8FAFC', fontWeight: 500 }}>{status.current_message || 'Processing...'}</Typography>
-          </Box>
+          {shouldShowAgentTerminal && (
+            <Grid container spacing={2} sx={{ mt: 3 }}>
+              {liveInvestigationStats.map((card) => (
+                <Grid item xs={12} sm={4} key={card.label}>
+                  <Paper
+                    elevation={0}
+                    sx={{
+                      p: 2.25,
+                      minHeight: 104,
+                      borderRadius: 2,
+                      bgcolor: 'rgba(2, 6, 23, 0.48)',
+                      border: '1px solid rgba(148, 163, 184, 0.14)',
+                    }}
+                  >
+                    <Typography sx={{ color: card.tone, fontWeight: 900, fontSize: { xs: '1.45rem', md: '1.85rem' }, lineHeight: 1 }}>
+                      {card.value}
+                    </Typography>
+                    <Typography variant="overline" sx={{ color: '#94A3B8', letterSpacing: 0 }}>
+                      {card.label}
+                    </Typography>
+                  </Paper>
+                </Grid>
+              ))}
+            </Grid>
+          )}
 
           {shouldShowAgentTerminal && (
           <Paper
@@ -499,26 +761,19 @@ const InvestigationPage = ({ sessionId, onBackToUpload, onSessionMissing }) => {
             sx={{
               mt: 3,
               overflow: 'hidden',
-              borderRadius: 3,
-              border: '1px solid rgba(34, 211, 238, 0.18)',
+              borderRadius: 2,
+              border: '1px solid rgba(148, 163, 184, 0.16)',
               bgcolor: 'rgba(2, 6, 23, 0.86)',
-              boxShadow: '0 22px 60px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255,255,255,0.04)',
+              boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.04)',
               position: 'relative',
               '&::before': {
                 content: '""',
                 position: 'absolute',
                 inset: 0,
                 pointerEvents: 'none',
-                backgroundImage: 'linear-gradient(rgba(34, 211, 238, 0.035) 1px, transparent 1px)',
+                backgroundImage: 'linear-gradient(rgba(148, 163, 184, 0.032) 1px, transparent 1px)',
                 backgroundSize: '100% 11px',
-                opacity: 0.55,
-              },
-              '&::after': {
-                content: '""',
-                position: 'absolute',
-                inset: 0,
-                pointerEvents: 'none',
-                background: 'radial-gradient(circle at 14% 0%, rgba(34,211,238,0.18), transparent 32%), radial-gradient(circle at 90% 15%, rgba(16,185,129,0.12), transparent 28%)',
+                opacity: 0.24,
               },
             }}
           >
@@ -531,17 +786,17 @@ const InvestigationPage = ({ sessionId, onBackToUpload, onSessionMissing }) => {
                   alignItems: 'center',
                   justifyContent: 'space-between',
                   gap: 2,
-                  borderBottom: '1px solid rgba(34, 211, 238, 0.12)',
+                  borderBottom: '1px solid rgba(148, 163, 184, 0.14)',
                   bgcolor: 'rgba(15, 23, 42, 0.72)',
                 }}
               >
                 <Stack direction="row" spacing={1.2} alignItems="center">
                   <Stack direction="row" spacing={0.7}>
-                    <Box sx={{ width: 9, height: 9, borderRadius: '50%', bgcolor: '#fb7185', boxShadow: '0 0 10px rgba(251,113,133,0.55)' }} />
-                    <Box sx={{ width: 9, height: 9, borderRadius: '50%', bgcolor: '#f59e0b', boxShadow: '0 0 10px rgba(245,158,11,0.45)' }} />
-                    <Box sx={{ width: 9, height: 9, borderRadius: '50%', bgcolor: '#22c55e', boxShadow: '0 0 10px rgba(34,197,94,0.45)' }} />
+                    <Box sx={{ width: 9, height: 9, borderRadius: '50%', bgcolor: '#fb7185' }} />
+                    <Box sx={{ width: 9, height: 9, borderRadius: '50%', bgcolor: '#f59e0b' }} />
+                    <Box sx={{ width: 9, height: 9, borderRadius: '50%', bgcolor: '#93c5fd' }} />
                   </Stack>
-                  <Typography sx={{ color: '#67e8f9', fontFamily: 'monospace', fontWeight: 800, letterSpacing: '0.12em', fontSize: '0.78rem' }}>
+                  <Typography sx={{ color: '#bfdbfe', fontFamily: 'monospace', fontWeight: 800, letterSpacing: 0, fontSize: '0.78rem' }}>
                     AGENT_TERMINAL
                   </Typography>
                 </Stack>
@@ -550,19 +805,19 @@ const InvestigationPage = ({ sessionId, onBackToUpload, onSessionMissing }) => {
                   label={status.status === 'completed' ? 'SESSION CLOSED' : 'LIVE TRACE'}
                   sx={{
                     height: 22,
-                    color: status.status === 'completed' ? '#86efac' : '#67e8f9',
-                    border: '1px solid rgba(103,232,249,0.28)',
-                    bgcolor: 'rgba(8, 47, 73, 0.42)',
+                    color: status.status === 'completed' ? '#bbf7d0' : '#bfdbfe',
+                    border: '1px solid rgba(147,197,253,0.26)',
+                    bgcolor: 'rgba(37, 99, 235, 0.14)',
                     fontFamily: 'monospace',
                     fontWeight: 700,
-                    letterSpacing: '0.08em',
+                    letterSpacing: 0,
                   }}
                 />
               </Box>
 
               <Box sx={{ p: { xs: 2, md: 2.5 } }}>
                 <Box sx={{ mb: 2.2, display: 'flex', alignItems: 'center', gap: 1.2, flexWrap: 'wrap' }}>
-                  <Typography sx={{ color: '#22d3ee', fontFamily: 'monospace', fontWeight: 800 }}>$</Typography>
+                  <Typography sx={{ color: '#bfdbfe', fontFamily: 'monospace', fontWeight: 800 }}>$</Typography>
                   <Typography sx={{ color: '#E2E8F0', fontFamily: 'monospace', fontSize: '0.88rem' }}>
                     run dfir-agent --session {sessionId} --observe
                   </Typography>
@@ -570,45 +825,69 @@ const InvestigationPage = ({ sessionId, onBackToUpload, onSessionMissing }) => {
                     <Chip
                       size="small"
                       label={`${Math.round(getProgressValue(latestAgentEvent.progress))}%`}
-                      sx={{ height: 22, color: '#0f172a', bgcolor: '#67e8f9', fontFamily: 'monospace', fontWeight: 900 }}
+                      sx={{ height: 22, color: '#f8fafc', bgcolor: '#2563eb', fontFamily: 'monospace', fontWeight: 900 }}
                     />
                   )}
                 </Box>
 
                 <Box
-                  key={latestAgentEvent?.sequence || latestAgentEvent?.timestamp || 'waiting'}
                   sx={{
-                    minHeight: 64,
-                    display: 'flex',
-                    alignItems: 'center',
+                    minHeight: { xs: 180, md: 220 },
+                    maxHeight: { xs: 280, md: 340 },
+                    overflowY: 'auto',
+                    display: 'block',
                     px: 1.35,
                     py: 1.2,
                     borderRadius: 2,
-                    bgcolor: 'rgba(34, 211, 238, 0.08)',
-                    border: '1px solid rgba(34, 211, 238, 0.2)',
-                    boxShadow: '0 0 28px rgba(34,211,238,0.09)',
-                    animation: 'agentLineFade 1.5s ease-in-out both',
+                    bgcolor: 'rgba(15, 23, 42, 0.58)',
+                    border: '1px solid rgba(148, 163, 184, 0.16)',
+                    boxShadow: 'none',
+                    scrollbarWidth: 'thin',
+                    scrollbarColor: 'rgba(147,197,253,0.38) rgba(15,23,42,0.4)',
+                    '&::-webkit-scrollbar': { width: 8 },
+                    '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(147,197,253,0.3)', borderRadius: 999 },
+                    '&::-webkit-scrollbar-track': { bgcolor: 'rgba(15,23,42,0.42)' },
+                    animation: 'agentLineFade 0.45s ease-out both',
                     '@keyframes agentLineFade': {
-                      '0%': { opacity: 0, transform: 'translateY(6px)', filter: 'blur(2px)' },
-                      '18%': { opacity: 1, transform: 'translateY(0)', filter: 'blur(0)' },
-                      '78%': { opacity: 1, transform: 'translateY(0)', filter: 'blur(0)' },
-                      '100%': { opacity: 0.58, transform: 'translateY(-2px)', filter: 'blur(0)' },
+                      '0%': { opacity: 0.72, transform: 'translateY(4px)' },
+                      '18%': { opacity: 1, transform: 'translateY(0)' },
+                      '78%': { opacity: 1, transform: 'translateY(0)' },
+                      '100%': { opacity: 0.74, transform: 'translateY(-1px)' },
                     },
                   }}
                 >
                   {latestAgentEvent ? (
-                    <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '84px 96px 1fr' }, gap: { xs: 0.35, md: 1.25 }, alignItems: 'start', width: '100%' }}>
+                    <Stack spacing={1.05}>
+                      {activityEvents.slice(-10, -1).map((event, index) => (
+                        <Box
+                          key={event.sequence || event.timestamp || `${event.stage}-${index}`}
+                          sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '84px 96px minmax(0, 1fr)' }, gap: { xs: 0.35, md: 1.25 }, alignItems: 'start', width: '100%' }}
+                        >
+                          <Typography sx={{ color: '#64748b', fontFamily: 'monospace', fontSize: '0.76rem' }}>
+                            {formatAgentEventTime(event.timestamp)}
+                          </Typography>
+                          <Typography sx={{ color: '#bfdbfe', fontFamily: 'monospace', fontWeight: 900, fontSize: '0.74rem', letterSpacing: 0 }}>
+                            [{getAgentStageLabel(event.stage)}]
+                          </Typography>
+                          <Typography sx={{ color: getAgentEventColor(event.level), fontFamily: 'monospace', fontSize: '0.82rem', lineHeight: 1.55, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+                            <Box component="span" sx={{ color: '#93c5fd', mr: 1 }}>{'>'}</Box>
+                            {getAgentEventLine(event).replace(/\s+/g, ' ')}
+                          </Typography>
+                        </Box>
+                      ))}
+                    <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '84px 96px minmax(0, 1fr)' }, gap: { xs: 0.35, md: 1.25 }, alignItems: 'start', width: '100%' }}>
                       <Typography sx={{ color: '#64748b', fontFamily: 'monospace', fontSize: '0.76rem' }}>
                         {formatAgentEventTime(latestAgentEvent.timestamp)}
                       </Typography>
-                      <Typography sx={{ color: '#67e8f9', fontFamily: 'monospace', fontWeight: 900, fontSize: '0.74rem', letterSpacing: '0.08em' }}>
+                      <Typography sx={{ color: '#bfdbfe', fontFamily: 'monospace', fontWeight: 900, fontSize: '0.74rem', letterSpacing: 0 }}>
                         [{getAgentStageLabel(latestAgentEvent.stage)}]
                       </Typography>
-                      <Typography noWrap sx={{ color: getAgentEventColor(latestAgentEvent.level), fontFamily: 'monospace', fontSize: '0.82rem', lineHeight: 1.55 }}>
-                        <Box component="span" sx={{ color: '#34d399', mr: 1 }}>›</Box>
+                      <Typography sx={{ color: getAgentEventColor(latestAgentEvent.level), fontFamily: 'monospace', fontSize: '0.82rem', lineHeight: 1.55, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+                        <Box component="span" sx={{ color: '#93c5fd', mr: 1 }}>›</Box>
                         {getAgentEventLine(latestAgentEvent).replace(/\s+/g, ' ')}
                       </Typography>
                     </Box>
+                    </Stack>
                   ) : (
                     <Typography sx={{ color: '#94A3B8', fontFamily: 'monospace', fontSize: '0.85rem' }}>
                       › Waiting for agent telemetry stream...
@@ -622,139 +901,24 @@ const InvestigationPage = ({ sessionId, onBackToUpload, onSessionMissing }) => {
         </Paper>
       )}
 
-      {/* Metrics Overview */}
-      {(status?.summary || report) && (
-        <Grid container spacing={2} sx={{ mb: 4 }}>
-          {metricCards.map((card, idx) => (
-            card.value !== 'N/A' && (
-              <Grid item xs={6} sm={3} key={idx}>
-                <Paper elevation={0} sx={{ p: 3, borderRadius: 3, textAlign: 'center', bgcolor: 'rgba(15, 23, 42, 0.62)', backdropFilter: 'blur(10px)', border: '1px solid rgba(255,255,255,0.05)' }}>
-                  <Typography variant="h3" sx={{ color: 'primary.main', fontWeight: 700, mb: 0.5 }}>{card.value}</Typography>
-                  <Typography variant="overline" color="text.secondary" sx={{ letterSpacing: '0.05em' }}>{card.label}</Typography>
-                </Paper>
-              </Grid>
-            )
-          ))}
-        </Grid>
-      )}
-
       {/* Report Section */}
       {status?.status === 'completed' && report && (
-        <Paper elevation={0} sx={{ borderRadius: 4, bgcolor: 'rgba(15, 23, 42, 0.62)', backdropFilter: 'blur(14px)', border: '1px solid rgba(148, 163, 184, 0.16)', overflow: 'hidden' }}>
-          <Box sx={{ borderBottom: 1, borderColor: 'divider', bgcolor: 'rgba(0,0,0,0.2)' }}>
-            <Tabs 
-              value={activeTab} 
-              onChange={(e, newValue) => setActiveTab(newValue)} 
-              variant="scrollable" 
-              scrollButtons="auto"
-              sx={{ 
-                '& .MuiTab-root': { color: 'text.secondary', fontWeight: 600, py: 2.5 },
-                '& .Mui-selected': { color: 'primary.main' }
-              }}
-            >
-              <Tab icon={<ArticleIcon sx={{ mb: 0 }}/>} iconPosition="start" label="Overview" />
-              <Tab icon={<BugReportIcon sx={{ mb: 0 }}/>} iconPosition="start" label="IOCs" disabled={!report.ioc_analysis || report.ioc_analysis.length === 0} />
-              <Tab icon={<TimelineIcon sx={{ mb: 0 }}/>} iconPosition="start" label="Timeline" disabled={!report.attack_timeline || report.attack_timeline.length === 0} />
-              <Tab icon={<LightbulbIcon sx={{ mb: 0 }}/>} iconPosition="start" label="Recommendations" disabled={!report.recommendations || report.recommendations.length === 0} />
-            </Tabs>
-          </Box>
-
-          <Box sx={{ p: { xs: 3, md: 5 } }}>
-            <TabPanel value={activeTab} index={0}>
-              <Typography variant="h5" sx={{ mb: 3, fontWeight: 700, color: '#F8FAFC' }}>Executive Summary</Typography>
-              {report.executive_summary ? (
-                <Suspense fallback={<Typography color="text.secondary">Loading summary...</Typography>}>
-                  <MarkdownRenderer content={report.executive_summary} />
-                </Suspense>
-              ) : (
-                <Typography color="text.secondary">No executive summary available.</Typography>
-              )}
-            </TabPanel>
-
-            <TabPanel value={activeTab} index={1}>
-              <Typography variant="h5" sx={{ mb: 3, fontWeight: 700, color: '#F8FAFC' }}>Indicators of Compromise</Typography>
-              <Stack spacing={2}>
-                {(report.ioc_analysis || []).map((ioc, idx) => (
-                  <Box key={idx} sx={{ p: 2.5, border: '1px solid rgba(255,255,255,0.1)', borderRadius: 3, bgcolor: 'rgba(255,255,255,0.02)' }}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', mb: ioc.threat_intel ? 1.5 : 0, flexWrap: 'wrap', gap: 1.5 }}>
-                      <Chip 
-                        label={ioc.type?.toUpperCase()} 
-                        size="small"
-                        color={ioc.threat_level === 'high' ? 'error' : ioc.threat_level === 'medium' ? 'warning' : 'info'}
-                        sx={{ fontWeight: 700 }}
-                      />
-                      <Typography variant="body1" sx={{ fontFamily: 'monospace', fontWeight: 600, color: '#F8FAFC' }}>
-                        {ioc.value}
-                      </Typography>
-                    </Box>
-                    {ioc.threat_intel && (
-                      <Typography variant="body2" color="text.secondary" sx={{ p: 1.5, bgcolor: 'rgba(0,0,0,0.2)', borderRadius: 2 }}>
-                        {ioc.threat_intel}
-                      </Typography>
-                    )}
-                  </Box>
-                ))}
-              </Stack>
-            </TabPanel>
-
-            <TabPanel value={activeTab} index={2}>
-              <Typography variant="h5" sx={{ mb: 4, fontWeight: 700, color: '#F8FAFC' }}>Attack Timeline</Typography>
-              <Box sx={{ position: 'relative', pl: 3.5, borderLeft: '2px solid rgba(6, 182, 212, 0.3)', ml: 1 }}>
-                {(report.attack_timeline || []).map((event, idx) => (
-                  <Box key={idx} sx={{ position: 'relative', mb: 5, '&:last-child': { mb: 0 } }}>
-                    <Box sx={{ 
-                      position: 'absolute', 
-                      left: -37, 
-                      top: 4,
-                      width: 14, 
-                      height: 14, 
-                      borderRadius: '50%', 
-                      bgcolor: '#06b6d4',
-                      border: '3px solid #0f172a',
-                      boxShadow: '0 0 10px rgba(6,182,212,0.5)'
-                    }} />
-                    <Typography variant="caption" sx={{ color: 'primary.main', fontWeight: 700, display: 'block', mb: 1, letterSpacing: '0.05em' }}>
-                      {formatDisplayDate(event.timestamp)}
-                    </Typography>
-                    <Typography variant="h6" sx={{ fontWeight: 600, mb: 1, color: '#F8FAFC', lineHeight: 1.3 }}>
-                      {event.event}
-                    </Typography>
-                    {event.details && (
-                      <Typography variant="body2" color="text.secondary" sx={{ bgcolor: 'rgba(255,255,255,0.02)', p: 2, borderRadius: 2, border: '1px solid rgba(255,255,255,0.05)' }}>
-                        {event.details}
-                      </Typography>
-                    )}
-                  </Box>
-                ))}
-              </Box>
-            </TabPanel>
-
-            <TabPanel value={activeTab} index={3}>
-              <Typography variant="h5" sx={{ mb: 3, fontWeight: 700, color: '#F8FAFC' }}>Recommendations</Typography>
-              <Box component="ul" sx={{ m: 0, pl: 0, listStyle: 'none' }}>
-                {(report.recommendations || []).map((rec, idx) => (
-                  <Box component="li" key={idx} sx={{ mb: 2 }}>
-                    <Paper elevation={0} sx={{ p: 2.5, bgcolor: 'rgba(16, 185, 129, 0.05)', border: '1px solid rgba(16, 185, 129, 0.2)', borderRadius: 3 }}>
-                      <Suspense fallback={<Typography color="text.secondary">Loading recommendation...</Typography>}>
-                        <MarkdownRenderer content={rec} />
-                      </Suspense>
-                    </Paper>
-                  </Box>
-                ))}
-              </Box>
-            </TabPanel>
-          </Box>
-        </Paper>
+        <ReportDashboard report={report} formatDisplayDate={formatDisplayDate} />
       )}
 
-      {/* Hidden export template for PDF generation */}
+      {/* Hidden export template for printable PDF/DOCX generation */}
       {report && (
-        <Box sx={{ position: 'absolute', top: '-9999px', left: '-9999px', width: '0', height: '0', overflow: 'hidden' }}>
+        <Box sx={{ position: 'absolute', top: 0, left: '-12000px', width: `${PDF_EXPORT_WIDTH_PX}px`, minHeight: '1200px', overflow: 'visible', pointerEvents: 'none', opacity: 0 }}>
           <Box ref={pdfExportRef}>
             <Suspense fallback={<div />}>
-              <PDFExportTemplate 
-                content={buildExportSummary({ sessionId, status, report })} 
-                metadata={{ sessionId: report.metadata?.report_id || sessionId }}
+              <PDFExportTemplate
+                content={buildExportSummaryV2({ sessionId, status, report })}
+                metadata={{
+                  sessionId: report.metadata?.session_id || sessionId,
+                  reportId: report.metadata?.report_id,
+                  severity: report.metadata?.severity,
+                  logFile: report.metadata?.log_file,
+                }}
               />
             </Suspense>
           </Box>

@@ -27,25 +27,6 @@ from modules.workspace import resolve_training_workspace
 logger = logging.getLogger(__name__)
 
 
-WINDOWS_LOGHUB_LINE_PATTERN = re.compile(
-    r"^(?P<timestamp>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}),\s+"
-    r"(?P<level>\w+)\s+(?P<component>\S+)\s+(?P<message>.*)$"
-)
-WINDOWS_LOGHUB_GUID_PATTERN = re.compile(
-    r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
-)
-WINDOWS_LOGHUB_PATH_PATTERN = re.compile(r"(?:[A-Za-z]:\\|\\\\)[^\s,;\)\]\}]+")
-WINDOWS_LOGHUB_HEX_PATTERN = re.compile(
-    r"(?:0x[0-9a-fA-F]+|@[0-9a-fA-F]+|@[xX]?[0-9a-fA-F]+)"
-)
-WINDOWS_LOGHUB_VERSION_PATTERN = re.compile(r"\b\d+(?:\.\d+){2,}\b")
-WINDOWS_LOGHUB_INNER_TS_PATTERN = re.compile(
-    r"\b\d{4}/\d{1,2}/\d{1,2}:\d{2}:\d{2}:\d{2}(?:\.\d+)?\b"
-)
-WINDOWS_LOGHUB_NUMBER_PATTERN = re.compile(r"\b\d+\b")
-WINDOWS_LOGHUB_WHITESPACE_PATTERN = re.compile(r"\s+")
-
-
 def _resolve_training_workspace() -> Path:
     return resolve_training_workspace(__file__, "dataset/Drain.py")
 
@@ -302,16 +283,7 @@ class DrainParser:
                 if not raw_line:
                     continue
 
-                if self.template_strategy == "windows_loghub_cbs":
-                    parsed_line = self._parse_windows_loghub_line(raw_line)
-                    if parsed_line is None:
-                        skipped_malformed_records += 1
-                        continue
-                    timestamp, level, component, message = parsed_line
-                    normalized_message = self._normalize_windows_loghub_message(message)
-                    event_template = f"{component} {level} {normalized_message}"
-                    cluster_id = event_template
-                elif self.template_strategy == "linux_ait_lds":
+                if self.template_strategy == "linux_log":
                     from modules.linux_log_templates import (
                         build_linux_event_template,
                         classify_linux_log_source,
@@ -526,8 +498,8 @@ class DrainParser:
             template = f"{provider} EventID={event_id}"
             return template, template
 
-        if self.template_strategy == "windows_apt_evtx":
-            template = self._build_windows_apt_evtx_template(
+        if self.template_strategy == "windows_evtx_metadata":
+            template = self._build_windows_evtx_metadata_template(
                 provider=provider,
                 event_id=event_id,
                 channel=channel,
@@ -547,7 +519,7 @@ class DrainParser:
         result = self.template_miner.add_log_message(raw_line)
         return result["template_mined"], result["cluster_id"]
 
-    def _build_windows_apt_evtx_template(
+    def _build_windows_evtx_metadata_template(
         self,
         provider: str,
         event_id: Any,
@@ -555,7 +527,7 @@ class DrainParser:
         task: str = "",
         level: str = "",
     ) -> str:
-        """Build EVTX tokens in the same metadata order as Windows-APT DeepLog data."""
+        """Build EVTX tokens in the metadata order used by Windows EVTX DeepLog data."""
         parts = [f"EventID {self._clean_evtx_value(event_id, default='Unknown')}"]
         provider_clean = self._clean_evtx_value(provider)
         channel_clean = self._clean_evtx_value(channel)
@@ -602,32 +574,6 @@ class DrainParser:
         if not text or text.lower() == "none":
             return default
         return text
-
-    def _parse_windows_loghub_line(
-        self, raw_line: str
-    ) -> Optional[Tuple[str, str, str, str]]:
-        match = WINDOWS_LOGHUB_LINE_PATTERN.match(raw_line.strip().lstrip("\ufeff"))
-        if not match:
-            return None
-        return (
-            match.group("timestamp"),
-            match.group("level"),
-            match.group("component"),
-            match.group("message"),
-        )
-
-    def _normalize_windows_loghub_message(self, message: str) -> str:
-        text = message.strip()
-        text = WINDOWS_LOGHUB_PATH_PATTERN.sub("<PATH>", text)
-        text = WINDOWS_LOGHUB_GUID_PATTERN.sub("<GUID>", text)
-        text = WINDOWS_LOGHUB_INNER_TS_PATTERN.sub("<TIME>", text)
-        text = WINDOWS_LOGHUB_VERSION_PATTERN.sub("<VERSION>", text)
-        text = WINDOWS_LOGHUB_HEX_PATTERN.sub("<HEX>", text)
-        text = WINDOWS_LOGHUB_NUMBER_PATTERN.sub("<NUM>", text)
-        text = WINDOWS_LOGHUB_WHITESPACE_PATTERN.sub(" ", text).strip()
-        if len(text) > 260:
-            text = text[:260].rstrip() + " <TRUNC>"
-        return text or "<EMPTY>"
 
     def _extract_parameters(self, original: str) -> Tuple[List[str], Dict[str, str]]:
         """Extract IOC-relevant values and structured key-value mapping."""

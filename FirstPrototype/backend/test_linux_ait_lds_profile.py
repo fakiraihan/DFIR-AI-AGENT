@@ -143,7 +143,7 @@ class LinuxAitLdsProfileTest(unittest.TestCase):
 
             parsed_df, templates = parse_log_file(
                 str(auth_log),
-                template_strategy="linux_ait_lds",
+                template_strategy="linux_log",
             )
 
             self.assertEqual(len(parsed_df), 1)
@@ -156,20 +156,20 @@ class LinuxAitLdsProfileTest(unittest.TestCase):
 
     def test_linux_profile_and_evaluator_choice_are_registered(self):
         class DummySettings:
-            linux_ait_lds_deeplog_model_path = "D:/models/linux/DeepLog.pt"
-            linux_ait_lds_deeplog_vocab_path = "D:/models/linux/DeepLog.pkl"
-            linux_ait_lds_deeplog_window_size = 10
-            linux_ait_lds_deeplog_topk = 9
-            linux_ait_lds_parser_template_strategy = "linux_ait_lds"
-            linux_ait_lds_deeplog_template_enrichment = "none"
+            linux_log_deeplog_model_path = "D:/models/linux/DeepLog.pt"
+            linux_log_deeplog_vocab_path = "D:/models/linux/DeepLog.pkl"
+            linux_log_deeplog_window_size = 10
+            linux_log_deeplog_topk = 9
+            linux_log_parser_template_strategy = "linux_log"
+            linux_log_deeplog_template_enrichment = "none"
 
-        profile = build_model_profile("linux_ait_lds", DummySettings())
-        args = build_arg_parser().parse_args(["--profile", "linux_ait_lds"])
+        profile = build_model_profile("linux_log", DummySettings())
+        args = build_arg_parser().parse_args(["--profile", "linux_log"])
 
-        self.assertEqual(profile["name"], "linux_ait_lds")
-        self.assertEqual(profile["template_strategy"], "linux_ait_lds")
+        self.assertEqual(profile["name"], "linux_log")
+        self.assertEqual(profile["template_strategy"], "linux_log")
         self.assertEqual(profile["topk"], 9)
-        self.assertEqual(args.profile, "linux_ait_lds")
+        self.assertEqual(args.profile, "linux_log")
 
 
 if __name__ == "__main__":

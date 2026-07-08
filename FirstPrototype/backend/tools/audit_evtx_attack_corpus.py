@@ -128,10 +128,10 @@ def apply_audit_mode(mode: str) -> None:
         settings.parser_template_strategy = "provider_eventid"
         settings.deeplog_template_similarity_enabled = False
         return
-    if mode == "deeplog-windows-apt":
+    if mode == "deeplog-windows-evtx":
         settings.deeplog_unknown_template_mode = "evaluate"
         settings.deeplog_evtx_sparse_fallback_enabled = False
-        settings.evtx_general_deeplog_profile = "windows_apt"
+        settings.evtx_general_deeplog_profile = "windows_evtx"
         settings.deeplog_template_similarity_enabled = True
         return
     if mode == "hybrid-old":
@@ -151,9 +151,9 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument(
         "--mode",
-        choices=("settings", "deeplog", "deeplog-windows-apt", "hybrid-old"),
+        choices=("settings", "deeplog", "deeplog-windows-evtx", "hybrid-old"),
         default="settings",
-        help="settings=current config, deeplog=canonical OOV/no-heuristic, deeplog-windows-apt=conservative canonical profile, hybrid-old=pre-canonical heuristic fallback",
+        help="settings=current config, deeplog=canonical OOV/no-heuristic, deeplog-windows-evtx=conservative canonical profile, hybrid-old=pre-canonical heuristic fallback",
     )
     args = parser.parse_args()
 

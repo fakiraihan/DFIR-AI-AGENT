@@ -1,10 +1,10 @@
-# AI Agent DFIR - Frontend
+# JejakAgent - Frontend
 
-Frontend untuk sistem AI Agent DFIR dengan tema dark seperti ChatGPT.
+Frontend untuk JejakAgent, workspace DFIR dengan tema dark operasional yang fokus pada evidensi dan alur investigasi.
 
 ## 🎨 Fitur
 
-- **Dark Theme** - Tampilan gelap modern seperti ChatGPT
+- **Dark Theme** - Tampilan gelap modern untuk workspace investigasi siber
 - **Upload Page** - Drag & drop untuk upload file log (.evtx, .log, .txt, .csv)
 - **Investigation Page** - Progress tracking dan visualisasi hasil investigasi
 - **Chatbot** - Interface chat untuk berinteraksi dengan AI Assistant
@@ -111,7 +111,7 @@ python main.py
 
 ### Mengubah Warna Tema
 Edit file CSS di `src/index.css` dan komponen CSS lainnya.
-Primary color saat ini: `#10b981` (green)
+Primary color saat ini: `#2563eb` (calm blue)
 
 ### Mengubah Port Backend
 Edit `vite.config.js`:
@@ -143,7 +143,7 @@ proxy: {
 
 - Frontend menggunakan **pure CSS** tanpa framework seperti Tailwind/Bootstrap untuk kontrol penuh atas styling
 - Semua komponen React dibuat dengan **functional components** dan hooks
-- Design terinspirasi dari **ChatGPT interface** dengan dark theme
+- Design diarahkan sebagai **analyst workspace** yang evidence-first, kontras, dan operasional
 - Animasi smooth untuk transisi antar page
 
 ## 👨‍💻 Developer

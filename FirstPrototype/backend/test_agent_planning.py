@@ -71,6 +71,8 @@ class DFIRAgentPlanningTest(unittest.TestCase):
             "planning_completed": False,
             "planning_round": 0,
             "max_planning_rounds": 1,
+            "evidence_assessment": {},
+            "evidence_route": "",
             "correlation_analysis": "",
             "investigation_summary": "",
             "attack_timeline": [],

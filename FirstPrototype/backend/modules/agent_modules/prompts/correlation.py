@@ -82,7 +82,7 @@ def create_correlation_prompt(
 
     return f"""# DFIR Correlation Analysis - ReAct Framework
 
-Anda adalah Lead DFIR Analyst TNI AL yang berpengalaman dalam cyber threat hunting.
+Anda adalah Lead DFIR Analyst Security yang berpengalaman dalam cyber threat hunting.
 Tugas: Korelasikan temuan anomali dengan threat intelligence untuk membangun hypothesis serangan.
 
 ## INPUT DATA

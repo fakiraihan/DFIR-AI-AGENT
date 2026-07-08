@@ -18,4 +18,41 @@ backend/data/gate_observations.jsonl
 backend/data/llm_settings.json
 backend/data/session_store/
 backend/data/raw_logs/
+backend/data/session_store_demo/
+data/session_store_demo/
+data/dfir_app.sqlite3
 keys/
+
+# tool caches / local config, not source
+.claude/
+.codegraph/
+.codex-tmp/
+.deepeval/
+
+# large eval/training artefacts and downloaded binaries
+/eval/
+evaluation/.deepeval/
+evaluation/datasets/
+evaluation/runtime/
+evaluation/results/
+tools/cloudflared.exe
+
+# impeccable-live-ignore-start
+.impeccable/hook.cache.json
+.impeccable/live/server.json
+.impeccable/live/sessions/
+.impeccable/live/previews/
+.impeccable/live/annotations/
+.impeccable/live/cache/
+.impeccable/live/manual-edit-apply-transaction.json
+.impeccable/live/manual-edit-events.jsonl
+.impeccable/live/manual-edit-evidence/
+.impeccable/live/pending-manual-edits.json
+.impeccable/live/deferred-svelte-component-accepts.json
+.impeccable-live.json
+.impeccable-live/
+node_modules/.impeccable-live/
+src/lib/impeccable/ImpeccableLiveRoot.svelte
+src/lib/impeccable/__runtime.js
+src/lib/impeccable/[0-9a-f]*/
+# impeccable-live-ignore-end

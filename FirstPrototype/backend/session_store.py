@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+import os
 from pathlib import Path
 import shutil
 from typing import Any
@@ -31,8 +32,14 @@ class SessionStore:
 
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.raw_logs_dir.mkdir(parents=True, exist_ok=True)
-        self.cache = Cache(str(self.cache_dir))
+        self.cache = Cache(str(self._diskcache_path()))
         self.cleanup_expired_sessions()
+
+    def _diskcache_path(self) -> Path:
+        try:
+            return Path(os.path.relpath(self.cache_dir, Path.cwd()))
+        except ValueError:
+            return self.cache_dir
 
     def _expiry_timestamp(self) -> str:
         if self.timeout_seconds is None:
@@ -81,6 +88,8 @@ class SessionStore:
         self.cleanup_expired_sessions()
         session = self.cache.get(session_id)
         if session is None:
+            return default
+        if not isinstance(session, dict):
             return default
         if touch:
             session = self._normalize_session(session)

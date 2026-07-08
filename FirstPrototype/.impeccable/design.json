@@ -1,0 +1,215 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-06-04T13:54:23.2505754+07:00",
+  "title": "Design System: JejakAgent",
+  "extensions": {
+    "colorMeta": {
+      "primary-teal": {
+        "role": "primary",
+        "displayName": "Signal Teal",
+        "canonical": "#0f766e",
+        "tonalRamp": ["#042f2e", "#115e59", "#0f766e", "#128074", "#b7d7d2"]
+      },
+      "secondary-indigo": {
+        "role": "secondary",
+        "displayName": "Forensic Indigo",
+        "canonical": "#818cf8",
+        "tonalRamp": ["#1e1b4b", "#312e81", "#3730a3", "#4338ca", "#4f46e5", "#6366f1", "#818cf8", "#a5b4fc"]
+      },
+      "background-abyss": {
+        "role": "neutral",
+        "displayName": "Abyss Background",
+        "canonical": "#070b14",
+        "tonalRamp": ["#020617", "#070b14", "#0b0f19", "#0f172a", "#1e293b", "#334155", "#64748b", "#94a3b8"]
+      },
+      "success-emerald": {
+        "role": "tertiary",
+        "displayName": "Verified Emerald",
+        "canonical": "#10b981",
+        "tonalRamp": ["#022c22", "#064e3b", "#065f46", "#047857", "#059669", "#10b981", "#34d399", "#a7f3d0"]
+      },
+      "warning-amber": {
+        "role": "tertiary",
+        "displayName": "Containment Amber",
+        "canonical": "#f59e0b",
+        "tonalRamp": ["#451a03", "#78350f", "#92400e", "#b45309", "#d97706", "#f59e0b", "#fbbf24", "#fde68a"]
+      },
+      "danger-rose": {
+        "role": "tertiary",
+        "displayName": "Incident Rose",
+        "canonical": "#f43f5e",
+        "tonalRamp": ["#4c0519", "#881337", "#9f1239", "#be123c", "#e11d48", "#f43f5e", "#fb7185", "#fecdd3"]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "Landing hero and rare top-level page moments."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Primary screen titles and investigation status."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Readable report, helper, and investigation prose."
+      },
+      "label": {
+        "displayName": "Operational Label",
+        "purpose": "Short status labels, overlines, and metadata."
+      }
+    },
+    "shadows": [
+      {
+        "name": "surface-border",
+        "value": "none; border: 1px solid rgba(148, 163, 184, 0.18)",
+        "purpose": "Main panels, cards, dialogs, and large content surfaces."
+      },
+      {
+        "name": "primary-action-rest",
+        "value": "none",
+        "purpose": "Primary contained buttons at rest."
+      },
+      {
+        "name": "primary-action-hover",
+        "value": "none",
+        "purpose": "Primary contained buttons on hover."
+      },
+      {
+        "name": "terminal-surface",
+        "value": "none; border: 1px solid rgba(34, 211, 238, 0.14)",
+        "purpose": "Live agent terminal and deep inspection surfaces."
+      }
+    ],
+    "motion": [
+      {
+        "name": "state-standard",
+        "value": "150-250ms ease",
+        "purpose": "Default state transitions for hover, focus, selection, and feedback."
+      },
+      {
+        "name": "progress-standard",
+        "value": "400ms cubic-bezier(0.4, 0, 0.2, 1)",
+        "purpose": "Progress bar motion and staged investigation feedback."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "sm",
+        "value": "600px"
+      },
+      {
+        "name": "md",
+        "value": "900px"
+      },
+      {
+        "name": "lg",
+        "value": "1200px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Main action button for starting investigations, saving settings, and confirming key workflow steps.",
+      "html": "<button class=\"ds-btn-primary\">Start Investigation</button>",
+      "css": ".ds-btn-primary { background: #0f766e; color: #ffffff; padding: 8px 18px; border: 0; border-radius: 10px; font-family: Segoe UI Variable, Aptos, system-ui, sans-serif; font-size: 1rem; font-weight: 650; letter-spacing: 0; box-shadow: none; transition: background-color 0.2s ease, transform 0.2s ease; } .ds-btn-primary:hover { background: #115e59; transform: translateY(-1px); } .ds-btn-primary:focus-visible { outline: 2px solid #b7d7d2; outline-offset: 3px; }"
+    },
+    {
+      "name": "Outlined Button",
+      "kind": "button",
+      "refersTo": "button-outlined",
+      "description": "Secondary action button for exports, refresh, quick analysis, and lower-commitment commands.",
+      "html": "<button class=\"ds-btn-outlined\">Run Quick Analysis</button>",
+      "css": ".ds-btn-outlined { background: rgba(15, 23, 42, 0.72); color: #b7d7d2; padding: 8px 18px; border: 1px solid rgba(183, 215, 210, 0.26); border-radius: 10px; font-family: Segoe UI Variable, Aptos, system-ui, sans-serif; font-size: 1rem; font-weight: 650; letter-spacing: 0; transition: background-color 0.2s ease, border-color 0.2s ease; } .ds-btn-outlined:hover { background: rgba(15, 118, 110, 0.12); border-color: rgba(183, 215, 210, 0.58); } .ds-btn-outlined:focus-visible { outline: 2px solid #b7d7d2; outline-offset: 3px; }"
+    },
+    {
+      "name": "Surface Card",
+      "kind": "card",
+      "refersTo": "card-surface",
+      "description": "Primary translucent surface for upload, settings, investigation, and report panels.",
+      "html": "<section class=\"ds-card-surface\"><h3>Investigation Complete</h3><p>Evidence, severity, timeline, and export actions stay grouped inside a stable panel.</p></section>",
+      "css": ".ds-card-surface { background: rgba(15, 23, 42, 0.84); color: #f8fafc; padding: 24px; border: 1px solid rgba(148, 163, 184, 0.18); border-radius: 12px; box-shadow: none; font-family: Segoe UI Variable, Aptos, system-ui, sans-serif; } .ds-card-surface h3 { margin: 0 0 8px; font-size: 1.1rem; font-weight: 700; letter-spacing: 0; } .ds-card-surface p { margin: 0; color: #cbd5e1; line-height: 1.6; }"
+    },
+    {
+      "name": "Status Chip",
+      "kind": "chip",
+      "refersTo": "chip-status",
+      "description": "Compact semantic marker for online state, severity, confidence, provider health, and evidence IDs.",
+      "html": "<span class=\"ds-chip-status\">System Online</span>",
+      "css": ".ds-chip-status { display: inline-flex; align-items: center; min-height: 24px; padding: 4px 10px; border-radius: 8px; background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.3); color: #34d399; font-family: Segoe UI Variable, Aptos, system-ui, sans-serif; font-size: 0.78rem; font-weight: 700; }"
+    },
+    {
+      "name": "Sidebar Nav Item",
+      "kind": "nav",
+      "refersTo": "navigation-active",
+      "description": "Persistent shell navigation item with active teal selection and compact product density.",
+      "html": "<button class=\"ds-nav-item ds-nav-item-active\">Upload Log</button>",
+      "css": ".ds-nav-item { width: 100%; min-height: 44px; padding: 8px 12px; border: 1px solid transparent; border-radius: 10px; background: transparent; color: #cbd5e1; text-align: left; font-family: Segoe UI Variable, Aptos, system-ui, sans-serif; font-size: 0.95rem; font-weight: 500; transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease; } .ds-nav-item:hover { background: rgba(255, 255, 255, 0.04); color: #f8fafc; } .ds-nav-item-active { background: rgba(15, 118, 110, 0.16); color: #b7d7d2; border-color: rgba(183, 215, 210, 0.3); font-weight: 700; } .ds-nav-item:focus-visible { outline: 2px solid #b7d7d2; outline-offset: 2px; }"
+    },
+    {
+      "name": "Upload Dropzone",
+      "kind": "custom",
+      "refersTo": "dropzone",
+      "description": "Large file intake surface for EVTX, LOG, TXT, and CSV investigation starts.",
+      "html": "<div class=\"ds-dropzone\"><strong>Drop your log file here</strong><span>or click to browse from your computer</span></div>",
+      "css": ".ds-dropzone { display: grid; place-items: center; gap: 8px; min-height: 220px; padding: 40px; text-align: center; cursor: pointer; background: rgba(15, 23, 42, 0.84); border: 2px dashed rgba(183, 215, 210, 0.22); border-radius: 12px; color: #f8fafc; box-shadow: none; font-family: Segoe UI Variable, Aptos, system-ui, sans-serif; transition: border-color 0.2s ease, background-color 0.2s ease; } .ds-dropzone strong { font-size: 1.25rem; font-weight: 700; } .ds-dropzone span { color: #cbd5e1; } .ds-dropzone:hover { border-color: #b7d7d2; background: rgba(15, 118, 110, 0.08); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "Secure Command Console",
+      "overview": "JejakAgent should feel like a professional DFIR command surface: dark, focused, technically alive, and built for analysts who need to trust what they see. The product can be futuristic, but its futurism comes from crisp hierarchy, state-rich feedback, evidence density, and disciplined steel-teal accents rather than generic AI visual tropes.\n\nThe system rejects the generic blue AI-product look named in PRODUCT.md. It should never read as a soft blue chatbot wrapper, crypto dashboard, or decorative hacker-movie interface. Visual energy is allowed only when it sharpens investigation state: upload readiness, pipeline progress, evidence provenance, severity, confidence, and export actions.",
+    "keyCharacteristics": [
+      "Dark operational canvas with translucent slate panels.",
+      "Steel teal as a rare, high-signal action and selection color.",
+      "Indigo, amber, emerald, rose, and blue reserved for semantic system state.",
+      "Dense but readable panels for evidence, sessions, timelines, and report data.",
+      "Motion used for status feedback, not page choreography."
+    ],
+    "rules": [
+      {
+        "name": "The Teal Scarcity Rule",
+        "body": "Teal is a signal, not wallpaper. If more than roughly 10% of a task screen is teal, the interface starts looking like generic blue AI branding.",
+        "section": "colors"
+      },
+      {
+        "name": "The Semantic State Rule",
+        "body": "Emerald, amber, rose, and blue are reserved for meaning. Do not use them as decorative palette variety.",
+        "section": "colors"
+      },
+      {
+        "name": "The Evidence Readability Rule",
+        "body": "Long evidence strings, session IDs, event templates, hashes, and IOC values must wrap safely and stay readable. Never sacrifice log readability for a dramatic heading.",
+        "section": "typography"
+      },
+      {
+        "name": "The Product Scale Rule",
+        "body": "Product screens use fixed rem sizes and restrained hierarchy. Fluid hero-sized typography belongs only to the landing surface.",
+        "section": "typography"
+      },
+      {
+        "name": "The State Highlight Rule",
+        "body": "Highlights must explain state: selected, active, online, processing, error, or hover. Decorative glow without state is prohibited.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do use Signal Teal for primary actions, selected states, progress emphasis, and live trace highlights.",
+      "Do keep product screens dense, operational, and familiar; this is an analyst workspace, not a marketing animation reel.",
+      "Do use semantic colors consistently: emerald for verified/success, amber for caution, rose for error or high risk, blue for info.",
+      "Do preserve readable contrast for body text, report tables, event templates, session IDs, and IOC values.",
+      "Do use motion for state changes, loading, upload drag, progress, and feedback in the 150-250ms range.",
+      "Do keep evidence provenance, limitations, severity, confidence, and export actions visible and auditable."
+    ],
+    "donts": [
+      "Don't use generic blue AI-product styling: soft blue gradients, abstract AI glow, vague automation language, or visuals that could belong to any chatbot or SaaS dashboard.",
+      "Don't turn the interface into a crypto dashboard, neon hacker-movie surface, or decorative sci-fi screen.",
+      "Don't use teal as page wallpaper. If everything is tinted, nothing is a signal.",
+      "Don't add decorative motion that does not convey state.",
+      "Don't hide uncertainty or limitations behind polished copy. Analyst trust depends on visible caveats.",
+      "Don't let long evidence strings, hashes, file names, or event templates overflow their containers."
+    ]
+  }
+}

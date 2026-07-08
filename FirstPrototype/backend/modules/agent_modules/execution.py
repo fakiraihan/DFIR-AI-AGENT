@@ -266,8 +266,15 @@ def execute_single_tool_call(
         elif tool_name == "alienvault_otx_lookup":
             otx_ioc_type = "IPv4" if ioc_type == "ip" else ioc_type
             result = agent.threat_intel.alienvault_otx_lookup(ioc, otx_ioc_type)
+        elif tool_name == "shodan_internetdb_lookup":
+            result = agent.threat_intel.shodan_internetdb_lookup(ioc)
+        elif tool_name == "abuseipdb_lookup":
+            result = agent.threat_intel.abuseipdb_lookup(ioc)
         elif tool_name == "greynoise_lookup":
-            result = agent.threat_intel.greynoise_lookup(ioc)
+            # Deprecated: GreyNoise community API closed. Reroute to Shodan
+            # InternetDB so legacy plans / cached procedural memory still work.
+            result = agent.threat_intel.shodan_internetdb_lookup(ioc)
+            result.setdefault("deprecated_alias", "greynoise_lookup")
         elif tool_name == "virustotal_lookup":
             vt_ioc_type = "file" if ioc_type in ["md5", "sha256"] else ioc_type
             result = agent.threat_intel.virustotal_lookup(ioc, vt_ioc_type)
